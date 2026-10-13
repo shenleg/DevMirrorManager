@@ -51,6 +51,7 @@ Status: open
 - [部分镜像的索引、校验文件与可用性承诺](issues/05-partial-mirror-policy.md)：采用单一入口合并索引，任一目标平台必需文件齐备且校验通过即可收录；接受跨平台发现与别名安装限制，固定客户端及格式、原始清单、重新核验与内容先索引后的交付契约。
 - [下载任务的恢复、失败与完成语义](issues/06-download-lifecycle.md)：确定进度、取消、手动重试、批次并发、文件保护与校验、索引失败协调、目录变更及异常退出边界；并发上限和技术实现留待后续。
 - [前端技术栈与下载引擎的职责边界](issues/07-implementation-boundaries.md)：确定 React/TypeScript 与 Tauri/Rust 的职责、结构化输入及最小权限、JSON 任务状态、单 crate 与窄测试接缝，以及 macOS/Windows 原生验证和构建路线。
+- [生命周期数据失效与 LTS 筛选的边界策略](issues/09-lts-data-policy.md)：确定 UTC 日期边界、分离缓存与重判、未知状态的筛选处理、旧补丁提示及本机时钟承诺。
 
 ## Not yet specified
 
