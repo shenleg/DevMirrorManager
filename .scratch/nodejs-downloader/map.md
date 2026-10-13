@@ -54,6 +54,8 @@ Status: open
 - [生命周期数据失效与 LTS 筛选的边界策略](issues/09-lts-data-policy.md)：确定 UTC 日期边界、分离缓存与重判、未知状态的筛选处理、旧补丁提示及本机时钟承诺。
 - [同一目标平台的分发变体支持范围](issues/10-distribution-variants.md)：Linux 采用通用标准 `linux-x64` / `linux-arm64` 构建，不限定 Debian 等具体发行版并排除 musl 变体；范围外条目不展示诊断，清单失败由用户重试。
 
+- [第一版桌面交付的安装、签名与更新要求](issues/12-desktop-release-requirements.md)：确定内部交付的运行平台与系统下限、分架构 DMG 和当前用户 NSIS、有限签名与首次运行限制、WebView2 联网依赖、手动升级与数据保留，以及原生安装包验收边界。
+
 ## Not yet specified
 
 <!-- 当前暂无未能精确描述的雾区；后续随已解决的决策推进再补充。 -->
