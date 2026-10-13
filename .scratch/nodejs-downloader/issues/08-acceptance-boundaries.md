@@ -3,7 +3,7 @@
 Type: grilling
 Labels: wayfinder:grilling
 Status: open
-Blocked by: 04, 05, 06, 07
+Blocked by: 04, 05, 06, 07, 11
 Assignee: none
 
 本议题确认第一阶段路线何时足以交给开发，验证用户必须需求而不把后续运行时、Nexus API 上传和生产发布混入第一版验收。
