@@ -19,10 +19,10 @@ Status: open
 - Node.js 发行版本和分发文件的上游固定为 `https://nodejs.org/dist/`；生命周期判定所需的官方数据依据见已完成调研，数据失效策略仍待决策。
 - 下载器第一版运行于 macOS 和 Windows；运行平台不限制可下载的目标平台。
 - 页面支持搜索、多选发行版本、仅显示当前受支持 LTS；排除已停止维护的历史 LTS 发布线。发行版本上的 LTS 标记和发布线的支持状态必须分别判断，搜索过滤器以查询时的“现在”为判定时间，不硬编码调研当天的支持状态。
-- 保留已确认的选择维度：发行版本、操作系统、CPU 架构和文件格式；只允许真实存在的组合，批量版本可应用一组目标平台与文件格式。分发变体边界见 Decisions so far。
+- 保留已确认的选择维度：发行版本、操作系统、CPU 架构和文件格式；只允许真实存在的组合，批量版本可应用一组目标平台与文件格式。分发变体边界见 Decisions so far。系统/架构下拉框保持可选，不展示支持比例，按已选发行版本必需格式齐备情况仅禁用加入按钮，允许部分支持；已确认细则与待体验原型见[搜索、多选与目标平台组合的交互模型](issues/04-selection-interaction.md)，该议题尚未整体解决。
 - 默认面向 nvm 所需的分发文件，不默认下载源码、安装器或所有附件；兼容客户端版本、必需格式与可选格式原则见 [部分镜像的索引、校验文件与可用性承诺](issues/05-partial-mirror-policy.md)。
 - 用户选择输出根目录，内容保存到其下的 `nodejs/`，不固定到仓库目录。保留上游原始文件名与相对路径，不解压、不改名。
-- 消费客户端保留 nvm-sh 与 nvm-windows；Linux 上的 nvm 消费环境仅承诺 Debian，macOS nvm-sh 与 Windows nvm-windows 契约保留。后续 Nexus 上传应以 `nodejs/` 内的相对路径为基准。限定客户端与使用场景的消费契约已记录在 [部分镜像的索引、校验文件与可用性承诺](issues/05-partial-mirror-policy.md)；源码调研和路径相似不等于已通过实际客户端兼容验收。
+- 消费客户端保留 nvm-sh 与 nvm-windows；Linux 按通用标准 `linux-x64` / `linux-arm64` 目标处理，不限定 Debian 等具体发行版，但仍排除 musl 变体；macOS nvm-sh 与 Windows nvm-windows 契约保留。后续 Nexus 上传应以 `nodejs/` 内的相对路径为基准。限定客户端与使用场景的消费契约已记录在 [部分镜像的索引、校验文件与可用性承诺](issues/05-partial-mirror-policy.md)；源码调研和路径相似不等于已通过实际客户端兼容验收。
 - 用户明确补充需求中的“根据下载的内容列出内容”指版本管理工具消费镜像时的版本发现（A），不是新增应用镜像地址设置页或代为配置 nvm。镜像索引以实际已完成并通过校验的内容为依据，不能照搬上游全量索引并宣称未下载内容可用；某版本只备有部分系统/架构文件，也不能宣称其余组合可用。单一入口合并索引及其跨平台发现、别名和交付限制见 [部分镜像的索引、校验文件与可用性承诺](issues/05-partial-mirror-policy.md)；具体任务恢复和失败协调仍由后续议题决定。
 
 ### 后续需求（不属于本地图交付范围）
@@ -52,7 +52,7 @@ Status: open
 - [下载任务的恢复、失败与完成语义](issues/06-download-lifecycle.md)：确定进度、取消、手动重试、批次并发、文件保护与校验、索引失败协调、目录变更及异常退出边界；并发上限和技术实现留待后续。
 - [前端技术栈与下载引擎的职责边界](issues/07-implementation-boundaries.md)：确定 React/TypeScript 与 Tauri/Rust 的职责、结构化输入及最小权限、JSON 任务状态、单 crate 与窄测试接缝，以及 macOS/Windows 原生验证和构建路线。
 - [生命周期数据失效与 LTS 筛选的边界策略](issues/09-lts-data-policy.md)：确定 UTC 日期边界、分离缓存与重判、未知状态的筛选处理、旧补丁提示及本机时钟承诺。
-- [同一目标平台的分发变体支持范围](issues/10-distribution-variants.md)：Linux 的 nvm 消费环境限定为 Debian 并排除所有 musl 变体；范围外条目不展示诊断，清单失败由用户重试。
+- [同一目标平台的分发变体支持范围](issues/10-distribution-variants.md)：Linux 采用通用标准 `linux-x64` / `linux-arm64` 构建，不限定 Debian 等具体发行版并排除 musl 变体；范围外条目不展示诊断，清单失败由用户重试。
 
 ## Not yet specified
 

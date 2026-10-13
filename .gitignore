@@ -1,2 +1,8 @@
 # macOS Finder 生成的目录元数据
 .DS_Store
+
+# Playwright MCP 生成的本地验证快照与日志
+/.playwright-mcp/
+
+# 本次交互原型的临时验证截图，不作为设计资产维护
+/nodejs-selection-prototype-updated.png

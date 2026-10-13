@@ -27,8 +27,8 @@ Assignee: collin
 
 ### 支持范围
 
-- 消费客户端保留 nvm-sh `v0.40.8` 与 nvm-windows `v2.0.1` 的既有契约。Linux 上的 nvm 消费环境只承诺 Debian；macOS 上的 nvm-sh 与 Windows 上的 nvm-windows 仍在范围内。客户端版本与格式依据见[部分镜像的索引、校验文件与可用性承诺](05-partial-mirror-policy.md)及[双客户端兼容调研](../research/mirror-protocol.md)。
-- Linux 只采用标准非 musl 分发文件；第一版统一排除所有 `*-musl` 变体，即使某发行版本的官方清单列出了这些文件也不纳入支持。Linux 消费兼容性不承诺 Debian 以外的发行版。
+- 消费客户端保留 nvm-sh `v0.40.8` 与 nvm-windows `v2.0.1` 的既有契约，macOS 上的 nvm-sh、Windows 上的 nvm-windows 与 Linux 消费均在第一版范围内。客户端版本与格式依据见[部分镜像的索引、校验文件与可用性承诺](05-partial-mirror-policy.md)及[双客户端兼容调研](../research/mirror-protocol.md)。
+- Linux 按通用 Linux 目标处理，不区分 Debian 等具体发行版；只采用官方标准 `linux-x64` / `linux-arm64` 分发文件。第一版统一排除所有 `*-musl` 变体，即使某发行版本的官方清单列出了这些文件也不纳入支持。
 - 分发变体不是新增的用户选择维度。原有发行版本、操作系统、CPU 架构和文件格式选择保持不变；不提供 musl 变体开关，也不需要增加变体选择或诊断界面。
 
 ### 清单与可用内容
@@ -43,3 +43,4 @@ Assignee: collin
 ## Comments
 
 - 2026-10-13：由官方清单中的真实变体差异毕业为独立决策议题；是否纳入第一版尚未获得用户确认。
+- 2026-10-13 resolution：用户确定 Linux 采用标准 `linux-x64` / `linux-arm64` 构建并排除 musl；Linux 消费目标不限定 Debian 等具体发行版。原 Debian-only 边界由本次明确决定取代。
