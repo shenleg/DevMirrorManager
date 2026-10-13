@@ -1,0 +1,432 @@
+<!-- 职责：用内存模拟验证共享下载任务的取消、异常反馈和镜像交付状态；临时原型，不执行下载或文件操作。 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Node.js 下载队列结果与异常反馈原型</title>
+  <style>
+    :root { color-scheme: light; --ink: #172b3a; --muted: #586c7a; --line: #d6e0e6; --accent: #087f8c; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: #f3f7f9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1180px; margin: auto; padding: 30px 22px 60px; }
+    h1 { margin: 0; font-size: 28px; } h2 { margin: 0 0 12px; font-size: 18px; } h3 { margin: 12px 0 8px; font-size: 15px; }
+    p { line-height: 1.65; } .muted, small { color: var(--muted); font-size: 12px; }
+    button, select { font: inherit; }
+    button { min-height: 36px; padding: 8px 11px; border: 1px solid #b9c9d1; border-radius: 7px; background: white; color: var(--ink); font-size: 12px; cursor: pointer; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    button:hover:not(:disabled) { border-color: var(--accent); background: #f0fafa; }
+    button.primary { color: white; background: var(--accent); border-color: var(--accent); }
+    button:focus-visible, select:focus-visible { outline: 3px solid #4db6c1; outline-offset: 2px; }
+    select { width: 100%; min-height: 40px; padding: 8px; border: 1px solid #b9c9d1; border-radius: 7px; background: white; color: var(--ink); }
+    label { display: grid; gap: 6px; font-size: 12px; }
+    .panel { padding: 20px; margin-top: 18px; border: 1px solid var(--line); border-radius: 12px; background: white; min-width: 0; }
+    .notice, .message { padding: 12px 14px; border-radius: 8px; background: #edf7f7; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+    .warning { background: #fff4df; color: #794b0b; }
+    .fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .toolbar, .tabs { display: flex; flex-wrap: wrap; gap: 7px; margin: 12px 0; }
+    .tabs [aria-selected="true"] { border-color: var(--accent); background: #e5f5f5; }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .card { padding: 14px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
+    .card p { font-size: 13px; margin: 8px 0; } .card h3 { margin-top: 0; }
+    .table-wrap { overflow-x: auto; } table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { padding: 10px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); } td.path { max-width: 300px; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    td button { margin: 3px 3px 0 0; } dl { margin: 8px 0; font-size: 12px; } dt { color: var(--muted); margin-top: 8px; } dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+    .steps { display: grid; gap: 7px; } .steps button { text-align: left; }
+    ol { padding-left: 22px; font-size: 12px; line-height: 1.8; } li { overflow-wrap: anywhere; }
+    @media (max-width: 760px) { main { padding: 22px 14px 40px; } .fields, .cards { grid-template-columns: 1fr; } h1 { font-size: 24px; } .panel { padding: 16px; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>下载请求结束，不等于镜像可交付</h1>
+  <p class="muted">本原型的问题：多个请求共享文件时，取消和失败会影响谁？如何区分请求结果、实际可用内容与镜像交付状态？</p>
+  <p class="notice warning"><strong>临时原型：</strong>版本、目录、进度、校验和错误全部是内存样例。不会联网、下载、校验真实文件或读写磁盘，不代表正式应用验收。每次刷新重置；“推进”只推进一个模拟阶段。并发 3 仅用于演示，不锁定正式上限。</p>
+  <section class="panel">
+    <h2>先选一个情景，逐步观察</h2>
+    <div class="tabs" role="tablist" aria-label="反馈情景" data-tabs></div>
+    <div data-walkthrough></div>
+  </section>
+  <section class="panel">
+    <h2>自由提交与推进</h2>
+    <div class="fields">
+      <label>发行版本<select data-version><option>v24.9.0</option><option>v22.18.0</option></select></label>
+      <label>目标平台<select data-target><option value="windows-x64">Windows · x64</option><option value="windows-arm64">Windows · ARM64</option><option value="macos-arm64">macOS · ARM64</option><option value="linux-x64">Linux · x64</option></select></label>
+      <label>输出根目录（模拟）<select data-root><option value="/demo/output-a">/demo/output-a</option><option value="/demo/output-b">/demo/output-b</option></select></label>
+    </div>
+    <div class="toolbar"><button class="primary" data-submit>下载 · 直接提交</button><button data-advance>推进一个阶段</button><button data-drain>推进至文件任务结束</button><button data-reset>重置演示</button></div>
+    <p class="muted">macOS/Linux 固定 .tar.xz + .tar.gz，Windows 固定 .7z；清单和模拟存在的 .sig 附件跨请求共享。无暂停、自动重试、断点续传或取消全部队列。</p>
+    <p class="message" data-feedback role="status" aria-live="polite"></p>
+  </section>
+  <section class="panel">
+    <h2>下载请求 · 分组不是串行屏障</h2>
+    <div class="cards" data-requests></div>
+    <p class="muted">取消请求只撤销它的需求；其他请求仍引用的任务继续。没有其他引用才停止未完成任务。正式文件保留，提交文件/协调索引的安全步骤完成后再结束取消。取消的请求不会被其他请求的重试重新激活。</p>
+  </section>
+  <section class="panel">
+    <h2>共享文件任务</h2>
+    <p class="muted" data-queue-note></p>
+    <div class="table-wrap" data-files></div>
+    <p class="muted">单文件取消先演示无共享引用的情形；共享文件的单文件取消入口暂不开放，避免把“取消我的请求”误变成“停止所有人的任务”。该入口仍待体验讨论。任务计数用于说明状态，不把共享字节重复计入全局下载量。</p>
+  </section>
+  <section class="panel">
+    <h2>镜像 · 内容与索引分别说明</h2>
+    <div class="cards" data-mirrors></div>
+    <p class="muted">索引只收录必需文件齐备且校验通过的平台。签名附件缺失告警，不阻断符合其他条件的内容；只保存附件，不执行 PGP 验证。本原型在文件任务结束后手动协调索引，是演示简化，不要求正式引擎等待所有下载后才更新索引。</p>
+  </section>
+  <section class="panel">
+    <h2>状态变化记录</h2><ol data-log></ol>
+  </section>
+</main>
+<script>
+  // 纯内存模型不依赖 DOM；视图只发送动作并渲染结果。
+  // 槽位与推演步数仅用于让演示有限、可手动驱动，不是正式业务数值。
+  const DEMO_CONCURRENCY = 3;
+  const ACTIVE = ["downloading", "checking", "committing"];
+  const LIVE = ["queued", ...ACTIVE];
+  const LABELS = { queued: "排队", downloading: "下载中", checking: "校验中", committing: "提交正式文件中", done: "已满足", failed: "失败", cancelled: "已取消" };
+  const ERRORS = {
+    network: "网络中断：停止此文件，其他独立任务继续；可手动重试。",
+    hash: "SHA-256 不匹配：本次临时内容不成为正式文件；可从头重试。",
+    conflict: "同路径已有冲突文件：原文件保留；请在应用外人工处理，不提供覆盖或删除。",
+    damaged: "正式文件被外部修改：保留磁盘文件，撤销受影响平台的可用声明；请在应用外人工处理。",
+    signature: "官方签名附件获取失败：告警；不阻止其他条件满足的内容可用。",
+    directory: "输出根目录不可用：停止依赖该目录的任务；不自动创建替代目录或改绑。",
+    disk: "磁盘空间不足：停止受影响目录的写入任务；其他输出目录继续。"
+  };
+  const TARGETS = {
+    "windows-x64": { label: "Windows · x64", tag: "win-x64", formats: ["7z"] },
+    "windows-arm64": { label: "Windows · ARM64", tag: "win-arm64", formats: ["7z"] },
+    "macos-arm64": { label: "macOS · ARM64", tag: "darwin-arm64", formats: ["tar.xz", "tar.gz"] },
+    "linux-x64": { label: "Linux · x64", tag: "linux-x64", formats: ["tar.xz", "tar.gz"] }
+  };
+
+  /** 创建初始演示状态；返回独立状态，不访问外部资源，不抛业务异常。 */
+  function initialState() { return { requests: [], files: [], mirrors: [], nextId: 1, log: [], feedback: "尚未提交；可先体验上方引导情景。" }; }
+  /** 列出指定请求的关联文件；返回原状态中的文件引用，不修改状态。 */
+  function requestFiles(s, request) { return request.files.map(id => s.files.find(file => file.id === id)); }
+  /** 找到任务的有效需求方；终止中的取消请求不再提供引用，但安全提交仍须完成。 */
+  function owners(s, file) { return s.requests.filter(request => request.mode === "active" && request.files.includes(file.id)); }
+  /** 计算满足必需文件和清单条件的平台；返回可用组合，不等同于索引已发布。 */
+  function available(s, root) {
+    const result = [];
+    for (const request of s.requests.filter(item => item.root === root)) {
+      const required = requestFiles(s, request).filter(file => file.kind !== "signature");
+      if (required.every(file => file.state === "done" && file.formal && !file.problem)) {
+        const name = `${request.version} · ${TARGETS[request.target].label}`;
+        if (!result.includes(name)) result.push(name);
+      }
+    }
+    return result;
+  }
+  /** 判断同根是否仍有待处理写入；取消需求后的安全提交也算未完成写入。 */
+  function hasLive(s, root) { return s.files.some(file => file.root === root && LIVE.includes(file.state)); }
+  /** 标记内容变化后索引需重新核验；协调中的索引保持串行占用，完成时按当时内容重新核验。 */
+  function dirty(s, root) { const mirror = s.mirrors.find(item => item.root === root); if (!["failed", "writing"].includes(mirror.index)) mirror.index = "dirty"; }
+  /** 分配演示槽位；文件校验等待本发行版本的官方清单，失败清单阻止相关分发文件。 */
+  function schedule(s) {
+    for (const file of s.files.filter(item => LIVE.includes(item.state) && item.kind === "artifact")) {
+      const manifest = s.files.find(item => item.root === file.root && item.version === file.version && item.kind === "manifest");
+      if (["failed", "cancelled"].includes(manifest.state) && file.state !== "committing") {
+        file.state = "failed"; file.error = "manifest";
+      }
+    }
+    let slots = DEMO_CONCURRENCY - s.files.filter(file => ACTIVE.includes(file.state)).length;
+    for (const file of s.files) {
+      if (slots <= 0) break;
+      if (file.state === "queued" && owners(s, file).length && !s.mirrors.find(mirror => mirror.root === file.root).issue) {
+        file.state = "downloading"; slots -= 1;
+      }
+    }
+  }
+  /** 结束不再等待一致性步骤的取消；返回值为空，仅更新传入的工作副本。 */
+  function finishCancellations(s) {
+    for (const request of s.requests.filter(item => item.mode === "cancelling")) {
+      const mirror = s.mirrors.find(item => item.root === request.root);
+      const committing = requestFiles(s, request).some(file => file.state === "committing");
+      if (!committing && !request.waitIndex && mirror.index !== "writing") request.mode = "cancelled";
+    }
+  }
+  /** 汇总请求结果；签名警告不冒充必需文件失败，文件满足也不承诺镜像已可交付。 */
+  function requestResult(s, request) {
+    if (request.mode === "cancelled") return "已取消 · 已有正式文件保留";
+    if (request.mode === "cancelling") return "取消处理中 · 等待必要的内容/索引一致性步骤";
+    const files = requestFiles(s, request), required = files.filter(file => file.kind !== "signature");
+    if (files.some(file => LIVE.includes(file.state))) return "进行中";
+    if (required.every(file => file.state === "done" && !file.problem)) return files.some(file => file.state !== "done") ? "必需内容齐备 · 附件告警" : "必需内容齐备";
+    const passed = required.filter(file => file.state === "done" && !file.problem).length;
+    return passed ? "部分文件成功 · 此目标尚不齐备" : "未成功 · 必需内容不足";
+  }
+  /** 对工作副本执行动作；非法动作返回说明而不绕过数据保护，不执行真实 I/O。 */
+  function apply(s, action) {
+    let file = s.files.find(item => item.id === action.file);
+    let request = s.requests.find(item => item.id === action.request);
+    let mirror = s.mirrors.find(item => item.root === action.root);
+    switch (action.type) {
+      case "submit": {
+        if (mirror?.issue) return "目录故障未处理，不能向该目录提交新下载；其他目录不受影响。";
+        if (!mirror) { mirror = { root: action.root, issue: null, index: "consistent", indexed: [] }; s.mirrors.push(mirror); }
+        request = { id: `R${s.nextId++}`, root: action.root, version: action.version, target: action.target, files: [], mode: "active", waitIndex: false };
+        const target = TARGETS[action.target];
+        const specs = [
+          { path: `${action.version}/SHASUMS256.txt`, kind: "manifest" },
+          { path: `${action.version}/SHASUMS256.txt.sig`, kind: "signature" },
+          ...target.formats.map(format => ({ path: `${action.version}/node-${action.version}-${target.tag}.${format}`, kind: "artifact" }))
+        ];
+        let reused = 0;
+        for (const spec of specs) {
+          file = s.files.find(item => item.root === action.root && item.path === spec.path);
+          if (file) {
+            reused += 1;
+            if (file.state === "cancelled") { file.state = "queued"; file.error = null; }
+          } else {
+            file = { ...spec, id: `F${s.nextId++}`, root: action.root, version: action.version, state: "queued", formal: false, error: null, problem: null };
+            s.files.push(file);
+          }
+          request.files.push(file.id);
+        }
+        s.requests.push(request);
+        schedule(s);
+        return `${request.id} 已直接提交；复用 ${reused} 个文件任务。复用失败项不自动重试，已有正式内容在索引协调前重新核验。`;
+      }
+      case "advance": {
+        let changed = 0;
+        // 只推进动作开始时正在执行的任务，避免同一次点击透过所有状态边界。
+        for (const item of s.files.filter(entry => ACTIVE.includes(entry.state))) {
+          if (item.state === "downloading") { item.state = item.kind === "artifact" ? "checking" : "committing"; changed += 1; }
+          else if (item.state === "checking") {
+            const manifest = s.files.find(entry => entry.root === item.root && entry.version === item.version && entry.kind === "manifest");
+            if (manifest.state === "done") { item.state = "committing"; changed += 1; }
+          } else { item.state = "done"; item.formal = true; dirty(s, item.root); changed += 1; }
+        }
+        schedule(s); finishCancellations(s);
+        return changed ? "已推进模拟阶段；下载结束后仍需校验、提交正式文件和协调索引。" : "没有可推进的文件任务；请检查失败清单、目录故障或等待索引协调的取消。";
+      }
+      case "cancel-request": {
+        if (!request || request.mode !== "active") return "该请求已经取消或正在结束取消。";
+        mirror = s.mirrors.find(item => item.root === request.root);
+        request.mode = "cancelling";
+        request.waitIndex = mirror.index === "writing" || requestFiles(s, request).some(item => item.state === "committing");
+        let shared = 0;
+        for (const item of requestFiles(s, request)) {
+          if (owners(s, item).length) { if (LIVE.includes(item.state)) shared += 1; continue; }
+          if (LIVE.includes(item.state) && item.state !== "committing") { item.state = "cancelled"; item.error = null; }
+        }
+        schedule(s); finishCancellations(s);
+        return `${request.id} 已撤销需求；${shared} 个共享未完成任务继续为其他请求执行。正式文件保留，临时内容仅模拟清理。`;
+      }
+      case "cancel-file": {
+        if (!file || !LIVE.includes(file.state)) return "只能取消未完成任务。";
+        if (owners(s, file).length > 1) return "该文件仍被多个请求引用；本原型不提供影响全部请求的单文件取消，请从请求分组取消需求。";
+        if (file.state === "committing") return "正在提交正式文件，先完成安全步骤；不能在此阶段强行终止。";
+        file.state = "cancelled"; schedule(s);
+        return "单文件已取消，其他任务继续；此目标可能不再具备全部必需内容。已完成正式文件不受影响。";
+      }
+      case "fail-file": {
+        if (!file || !LIVE.includes(file.state)) return "请选择一个尚未完成的文件任务。";
+        if (file.state === "committing") return "正在提交正式文件，本演示不模拟强制打断安全提交；可改用索引失败情景。";
+        if (action.error === "hash" && file.kind !== "artifact") return "SHA-256 失败演示仅针对分发文件，签名附件不执行 PGP 验证。";
+        file.state = "failed"; file.error = action.error;
+        if (action.error === "conflict") file.problem = "conflict";
+        schedule(s);
+        return ERRORS[action.error];
+      }
+      case "retry": {
+        if (!file || file.state !== "failed") return "只能手动重试失败项；已取消项可通过重新提交表达新需求。";
+        if (file.problem) return "原文件受到保护；请先在应用外人工处理冲突，本原型不覆盖、删除或替换正式文件。";
+        mirror = s.mirrors.find(item => item.root === file.root);
+        if (mirror.issue) return "先恢复目录条件，再手动重试；恢复目录不自动启动下载。";
+        if (!owners(s, file).length) return "此失败任务没有有效请求引用；请重新提交，不能复活已取消的请求。";
+        if (file.error === "manifest") {
+          const manifest = s.files.find(item => item.root === file.root && item.version === file.version && item.kind === "manifest");
+          if (manifest.state !== "done") return "请先手动重试并取得该发行版本的清单，再重试分发文件。";
+        }
+        file.state = "queued"; file.error = null; schedule(s);
+        return "已手动重试，从头获取；共享任务仍只执行一次。";
+      }
+      case "root-failure": {
+        if (!mirror) return "先向这个输出目录提交请求。";
+        if (mirror.index === "writing" || s.files.some(item => item.root === mirror.root && item.state === "committing")) return "该情景请在安全提交之前触发；本原型不模拟强制中断提交。";
+        mirror.issue = action.error;
+        for (const item of s.files.filter(entry => entry.root === mirror.root && LIVE.includes(entry.state))) { item.state = "failed"; item.error = action.error; }
+        schedule(s); return ERRORS[action.error];
+      }
+      case "restore-root": {
+        if (!mirror) return "尚无此镜像目录。";
+        mirror.issue = null; return "模拟原路径已恢复：任务仍保持失败，须用户手动重试；不自动改绑或猜测新路径。";
+      }
+      case "external": {
+        if (!file || !file.formal || file.kind !== "artifact") return "请选择已校验的正式分发文件。";
+        file.state = "failed"; file.error = "damaged"; file.problem = "damaged"; dirty(s, file.root);
+        return ERRORS.damaged;
+      }
+      case "human-fixed": {
+        if (!file?.problem) return "没有需要人工处理的同路径冲突。";
+        file.problem = null; file.formal = false;
+        return "仅模拟用户在应用外已自行处理该路径；应用未删除或替换文件，任务仍失败，须手动重试。";
+      }
+      case "index-start": {
+        if (!mirror) return "尚无镜像。";
+        if (mirror.issue) return "目录不可用，不能核验或更新索引。";
+        if (hasLive(s, mirror.root)) return "仍有未完成文件任务；本演示请先让任务结束，再核验并协调索引。";
+        if (mirror.index === "writing") return "该镜像根的索引已经在协调中，不重复启动。";
+        mirror.index = "writing";
+        return "正在重新核验全部被声明可用的内容，并串行协调该镜像根的完整索引；此时不可交付。";
+      }
+      case "index-finish": {
+        if (!mirror || mirror.index !== "writing") return "先开始索引协调。";
+        if (mirror.issue || hasLive(s, mirror.root)) return "镜像条件已变化，须先结束未完成写入，不能宣称此刻可交付。";
+        mirror.index = "consistent"; mirror.indexed = available(s, mirror.root);
+        for (const item of s.requests.filter(entry => entry.root === mirror.root && entry.mode === "cancelling")) item.waitIndex = false;
+        finishCancellations(s);
+        return mirror.indexed.length ? "核验与索引协调完成；满足条件的子集可交付，失败和取消不会撤销其他有效内容。" : "索引已与内容一致，但尚无齐备目标平台，不显示可交付镜像。";
+      }
+      case "index-fail": {
+        if (!mirror || mirror.index !== "writing") return "先开始索引协调，再模拟更新失败。";
+        mirror.index = "failed";
+        return "索引更新失败：保留正式文件和旧索引，不标为可交付。请手动重新核验与协调；等待一致性的取消继续处理中。";
+      }
+      default: return "未知演示动作。";
+    }
+  }
+  /** 返回动作后的新状态；原状态不变；未知或不允许动作只写提示。 */
+  function transition(state, action) {
+    const next = structuredClone(state);
+    if (action.type === "drain") {
+      // 有限推演避免演示中的清单失败/目录阻塞导致无限等待；没有自动重试。
+      for (let step = 0; step < 40; step += 1) {
+        const before = JSON.stringify(next.files);
+        apply(next, { type: "advance" });
+        if (before === JSON.stringify(next.files)) break;
+      }
+      next.feedback = "已推进可执行文件任务至结束或阻塞；未自动重试，也未自动协调索引。";
+    } else next.feedback = apply(next, action);
+    next.log.push(next.feedback);
+    return next;
+  }
+
+  // 以下仅为薄视图和引导情景；所有路径和官方文件均为模拟数据。
+  let state = initialState(), scene = 0, cursor = 0;
+  const ROOT = "/demo/output-a", OTHER = "/demo/output-b";
+  const submit = (target = "windows-x64", root = ROOT, version = "v24.9.0") => ({ type: "submit", root, version, target });
+  const fileAction = (s, type, kind, error, root = ROOT) => ({ type, file: s.files.find(file => file.root === root && file.kind === kind && (type === "external" ? file.formal : LIVE.includes(file.state)))?.id, error });
+  const indexAction = type => ({ type, root: ROOT });
+  const step = (label, action) => ({ label, action });
+  const SCENARIOS = [
+    { title: "共享取消", description: "同一发行版本的两个 Windows 请求共享清单和签名；取消先提交的请求，不应停止后一个请求。", steps: [
+      step("提交 Windows x64", submit()), step("提交 Windows ARM64，观察共享任务", submit("windows-arm64")),
+      step("取消第一个请求，共享任务继续", s => ({ type: "cancel-request", request: s.requests[0].id })),
+      step("推进剩余文件任务至结束", { type: "drain" }), step("重新核验并协调索引", indexAction("index-start")), step("完成索引，只交付齐备平台", indexAction("index-finish")) ] },
+    { title: "部分成功与重试", description: "一个请求网络失败不阻塞另一平台；齐备的子集仍可交付。重试失败项后，再更新索引。", steps: [
+      step("提交两个 Windows 目标", s => [submit(), submit("windows-arm64")]),
+      step("让 x64 分发文件网络失败", s => fileAction(s, "fail-file", "artifact", "network")),
+      step("其他文件继续完成", { type: "drain" }), step("协调索引", indexAction("index-start")), step("交付成功平台，仍列出失败项", indexAction("index-finish")),
+      step("手动重试失败文件", s => ({ type: "retry", file: s.files.find(file => file.error === "network").id })),
+      step("结束重试任务", { type: "drain" }), step("重新协调索引", indexAction("index-start")), step("交付两个平台", indexAction("index-finish")) ] },
+    { title: "校验失败", description: "macOS 两种格式必须齐备；一种 SHA-256 失败，另一文件成功也不能宣称该平台可安装。", steps: [
+      step("提交 macOS ARM64", submit("macos-arm64")), step("下载与清单推进一个阶段", { type: "advance" }),
+      step("模拟分发文件 SHA-256 失败", s => fileAction(s, "fail-file", "artifact", "hash")), step("其余文件完成", { type: "drain" }),
+      step("协调索引", indexAction("index-start")), step("观察无齐备平台，不标可交付", indexAction("index-finish")),
+      step("手动从头重试失败格式", s => ({ type: "retry", file: s.files.find(file => file.error === "hash").id })), step("重试完成", { type: "drain" }),
+      step("重新协调", indexAction("index-start")), step("必需格式齐备后可交付", indexAction("index-finish")) ] },
+    { title: "文件冲突保护", description: "已有同名文件不被覆盖；重试不能绕过保护。人工处理是应用外行为，仅在这里模拟结果。", steps: [
+      step("提交 Windows x64", submit()), step("模拟同路径文件冲突", s => fileAction(s, "fail-file", "artifact", "conflict")),
+      step("尝试重试，仍受保护", s => ({ type: "retry", file: s.files.find(file => file.problem === "conflict").id })), step("其余文件结束", { type: "drain" }),
+      step("仅模拟用户已在应用外处理冲突", s => ({ type: "human-fixed", file: s.files.find(file => file.problem === "conflict").id })),
+      step("用户手动重试", s => ({ type: "retry", file: s.files.find(file => file.error === "conflict").id })), step("重试任务结束", { type: "drain" }),
+      step("核验并协调索引", indexAction("index-start")), step("完成协调", indexAction("index-finish")) ] },
+    { title: "目录与磁盘故障", description: "输出目录 A 磁盘不足时，B 的独立任务继续；恢复 A 不自动下载，用户逐项重试。也可自由模拟路径不可用。", steps: [
+      step("向两个输出目录提交", s => [submit(), submit("windows-arm64", OTHER)]), step("模拟 A 空间不足", { type: "root-failure", root: ROOT, error: "disk" }),
+      step("继续处理 B", { type: "drain" }), step("恢复 A 原目录条件，不自动重试", { type: "restore-root", root: ROOT }),
+      step("用户手动重试 A 失败项", s => s.files.filter(file => file.root === ROOT && file.state === "failed").map(file => ({ type: "retry", file: file.id }))),
+      step("结束重试任务", { type: "drain" }), step("协调 A 索引", indexAction("index-start")), step("完成 A 索引", indexAction("index-finish")),
+      step("B 需单独协调索引", { type: "index-start", root: OTHER }), step("完成 B 索引", { type: "index-finish", root: OTHER }) ] },
+    { title: "索引失败", description: "文件已经齐备，索引失败仍不可交付。旧索引保留；手动重新核验与协调，不重复下载。", steps: [
+      step("提交并完成文件", s => [submit(), { type: "drain" }]), step("开始索引协调", indexAction("index-start")),
+      step("模拟索引写入失败", indexAction("index-fail")), step("手动重新核验并协调", indexAction("index-start")), step("完成协调才标可交付", indexAction("index-finish")) ] },
+    { title: "安全阶段取消", description: "取消发生在提交正式文件时，先完成安全步骤；不删正式内容。取消中不是卡死，应明确说明还在等什么。", steps: [
+      step("提交 Windows x64", submit()), step("推进至清单/签名正在提交", { type: "advance" }),
+      step("取消请求，观察取消处理中", s => ({ type: "cancel-request", request: s.requests[0].id })), step("完成必要正式文件提交", { type: "drain" }),
+      step("开始内容/索引协调", indexAction("index-start")), step("模拟协调失败，取消仍等待", indexAction("index-fail")),
+      step("重新协调", indexAction("index-start")), step("索引一致后结束取消", indexAction("index-finish")) ] },
+    { title: "外部修改", description: "已经交付的镜像里一个分发文件损坏：旧索引不能继续作为当前交付承诺。重新核验后撤下受影响平台，其他平台保留。", steps: [
+      step("提交两个目标并结束文件任务", s => [submit(), submit("windows-arm64"), { type: "drain" }]), step("协调索引", indexAction("index-start")), step("先形成可交付镜像", indexAction("index-finish")),
+      step("模拟 x64 正式文件被外部修改", s => fileAction(s, "external", "artifact")), step("尝试重试不能覆盖损坏正式文件", s => ({ type: "retry", file: s.files.find(file => file.problem === "damaged").id })),
+      step("重新核验并撤下失效声明", indexAction("index-start")), step("只交付剩余有效平台，损坏文件保留", indexAction("index-finish")) ] },
+    { title: "签名告警", description: "签名附件失败不是 SHA-256 失败；可用内容仍能收录，但不能声称官方 PGP 验证通过。", steps: [
+      step("提交 Windows x64", submit()), step("模拟签名附件获取失败", s => fileAction(s, "fail-file", "signature", "signature")), step("必需内容继续完成", { type: "drain" }),
+      step("核验与索引协调", indexAction("index-start")), step("可交付但保留附件告警", indexAction("index-finish")),
+      step("手动重试签名附件", s => ({ type: "retry", file: s.files.find(file => file.error === "signature").id })), step("附件完成", { type: "drain" }),
+      step("重新协调", indexAction("index-start")), step("交付且告警消除，不声称 PGP 验证", indexAction("index-finish")) ] },
+    { title: "单文件取消", description: "没有共享引用的必需分发文件可以单独取消，不停止独立任务；重新提交表达新需求，不复活旧取消请求。共享文件入口仍待讨论。", steps: [
+      step("提交 macOS ARM64", submit("macos-arm64")), step("取消一个独占的必需分发文件", s => fileAction(s, "cancel-file", "artifact")),
+      step("其他文件继续完成", { type: "drain" }), step("协调索引", indexAction("index-start")), step("必需格式不足，不标可交付", indexAction("index-finish")),
+      step("重新提交同一目标，复用已有内容", submit("macos-arm64")), step("缺失文件重新获取完成", { type: "drain" }),
+      step("重新协调", indexAction("index-start")), step("平台齐备后可交付", indexAction("index-finish")) ] }
+  ];
+
+  /** 转义模拟数据，防止文本被当作 HTML；返回可安全插入文本位置的字符串。 */
+  function escape(value) { return String(value).replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+  /** 创建动作按钮；参数指定展示文本、动作与禁用条件；不直接修改领域状态。 */
+  function button(label, action, disabled = false) { return `<button data-action="${escape(JSON.stringify(action))}" ${disabled ? "disabled" : ""}>${escape(label)}</button>`; }
+  /** 发送一个或多个动作并渲染；场景函数读取当前状态，不依赖真实文件。 */
+  function send(action) {
+    const actions = typeof action === "function" ? action(state) : action;
+    for (const item of Array.isArray(actions) ? actions : [actions]) state = transition(state, item);
+    render();
+  }
+  /** 将完整相关状态渲染为领域语言；不提供原型之外的下载或文件操作。 */
+  function render() {
+    document.querySelector("[data-feedback]").textContent = state.feedback;
+    document.querySelector("[data-tabs]").innerHTML = SCENARIOS.map((item, index) => `<button role="tab" aria-selected="${scene === index}" data-scene="${index}">${escape(item.title)}</button>`).join("");
+    const walkthrough = SCENARIOS[scene];
+    document.querySelector("[data-walkthrough]").innerHTML = `<p>${escape(walkthrough.description)}</p><p class="muted">切换情景会重置内存。自由操作可以随时使用；重新开始可恢复确定步骤。</p><div class="steps">${walkthrough.steps.map((item, index) => `<button data-step="${index}" ${index !== cursor ? "disabled" : ""}>${index < cursor ? "已执行 · " : ""}${index + 1}. ${escape(item.label)}</button>`).join("")}</div><div class="toolbar"><button data-restart>重新开始此情景</button></div>`;
+    document.querySelector("[data-requests]").innerHTML = state.requests.map(request => {
+      const files = requestFiles(state, request), done = files.filter(file => file.state === "done" && !file.problem).length;
+      const shared = files.filter(file => owners(state, file).length > 1).length;
+      const continuing = files.filter(file => LIVE.includes(file.state) && owners(state, file).some(owner => owner.id !== request.id)).length;
+      return `<article class="card"><h3>${request.id} · ${escape(request.version)} · ${escape(TARGETS[request.target].label)}</h3><p><strong>${escape(requestResult(state, request))}</strong></p><dl><dt>输出根目录 / 镜像根目录</dt><dd>${escape(request.root)} / nodejs/</dd><dt>关联文件满足情况（不是可安装性结论）</dt><dd>${done} / ${files.length} 个文件；其中 ${shared} 个文件由多个有效请求共享</dd><dt>取消影响</dt><dd>${request.mode === "active" ? "只撤销本请求需求，不停止其他请求所需的共享任务" : `${continuing} 个未完成共享任务仍为其他请求执行；正式文件保留`}</dd><dt>仍等待的安全步骤</dt><dd>${request.waitIndex ? "必要的内容/索引一致性协调（需在镜像面板完成）" : "无"}</dd></dl>${button("取消此请求", { type: "cancel-request", request: request.id }, request.mode !== "active")}</article>`;
+    }).join("") || '<p class="muted">尚无下载请求。</p>';
+    const executing = state.files.filter(file => ACTIVE.includes(file.state)).length;
+    document.querySelector("[data-queue-note]").textContent = `当前 ${executing} 个执行任务，演示上限 ${DEMO_CONCURRENCY}；${state.files.length} 个唯一文件任务。文件复用按输出目录 + 官方相对路径区分，不跨目录复用。`;
+    document.querySelector("[data-files]").innerHTML = state.files.length ? `<table><thead><tr><th>文件与目录</th><th>状态 / 保护</th><th>有效请求引用</th><th>主动操作与故障模拟</th></tr></thead><tbody>${state.files.map(file => {
+      const references = owners(state, file), live = LIVE.includes(file.state), mutable = live && file.state !== "committing";
+      const note = file.error === "manifest" ? "清单未取得，不能验证分发文件；先重试清单。" : ERRORS[file.error] || (file.state === "checking" ? "等待官方清单；SHA-256 尚未通过。" : "");
+      const actions = [
+        button("手动重试", { type: "retry", file: file.id }, file.state !== "failed" || !!file.problem || !references.length || !!state.mirrors.find(mirror => mirror.root === file.root).issue),
+        button("取消单文件", { type: "cancel-file", file: file.id }, !mutable || references.length > 1),
+        button("模拟网络失败", { type: "fail-file", file: file.id, error: file.kind === "signature" ? "signature" : "network" }, !mutable),
+        button("模拟校验失败", { type: "fail-file", file: file.id, error: "hash" }, !mutable || file.kind !== "artifact"),
+        button("模拟已有冲突", { type: "fail-file", file: file.id, error: "conflict" }, !mutable),
+        button("模拟外部修改", { type: "external", file: file.id }, !file.formal || file.kind !== "artifact" || !!file.problem),
+        file.problem ? button("模拟已在应用外人工处理", { type: "human-fixed", file: file.id }) : ""
+      ].join("");
+      return `<tr><td class="path">${file.id} · ${escape(file.path)}<br><small>${escape(file.root)}/nodejs/</small></td><td><strong>${LABELS[file.state]}</strong><br>${file.problem ? "磁盘原文件保留，不覆盖或删除" : file.formal ? file.kind === "artifact" ? "正式分发文件，模拟 SHA-256 已通过" : "原始附件已保存，未执行 PGP 验证" : "无本次已校验正式文件"}<p>${escape(note)}</p></td><td>${references.map(request => request.id).join("、") || "无有效引用"}${references.length > 1 ? "<p>仍有共享需求，取消一个请求不会停止此任务。</p>" : ""}</td><td>${actions}</td></tr>`;
+    }).join("")}</tbody></table>` : '<p class="muted">尚无文件任务。</p>';
+    document.querySelector("[data-mirrors]").innerHTML = state.mirrors.map(mirror => {
+      const content = available(state, mirror.root), pending = hasLive(state, mirror.root);
+      const deliverable = !mirror.issue && !pending && mirror.index === "consistent" && content.length > 0;
+      const indexLabel = { consistent: "索引与重新核验的内容一致", dirty: "内容已变化，索引待重新核验/协调", writing: "正在核验并串行协调索引", failed: "索引失败，旧索引保留" }[mirror.index];
+      const heading = mirror.issue ? "共享目录故障 · 不可交付" : deliverable ? "可交付 · 满足条件的部分镜像" : pending ? "正在准备 · 不可交付" : content.length ? "文件齐备，索引未确认 · 不可交付" : "无齐备目标平台 · 不可交付";
+      const warnings = state.files.filter(file => file.root === mirror.root && ["failed", "cancelled"].includes(file.state));
+      return `<article class="card"><h3>${escape(mirror.root)}/nodejs/</h3><p class="message ${deliverable ? "" : "warning"}"><strong>${heading}</strong></p><dl><dt>目录条件</dt><dd>${mirror.issue ? escape(ERRORS[mirror.issue]) : "原路径可用（模拟）"}</dd><dt>当前齐备且通过模拟校验的平台</dt><dd>${content.map(escape).join("<br>") || "无"}</dd><dt>索引状态</dt><dd>${indexLabel}</dd><dt>上次成功索引包含的平台（待协调时不可当作当前交付承诺）</dt><dd>${mirror.indexed.map(escape).join("<br>") || "无"}</dd><dt>失败 / 取消 / 附件告警</dt><dd>${warnings.map(file => `${escape(file.path)} · ${escape(file.error ? ERRORS[file.error] || "清单未取得" : "已取消")}`).join("<br>") || "无"}</dd></dl><div class="toolbar">${button(mirror.index === "failed" ? "重新核验与协调索引" : "重新核验并协调索引", { type: "index-start", root: mirror.root }, !!mirror.issue || pending || mirror.index === "writing")}${button("完成索引协调", { type: "index-finish", root: mirror.root }, mirror.index !== "writing" || pending)}${button("模拟索引失败", { type: "index-fail", root: mirror.root }, mirror.index !== "writing")}</div><div class="toolbar">${button("模拟目录不可用", { type: "root-failure", root: mirror.root, error: "directory" }, !!mirror.issue)}${button("模拟空间不足", { type: "root-failure", root: mirror.root, error: "disk" }, !!mirror.issue)}${button("模拟原路径恢复", { type: "restore-root", root: mirror.root }, !mirror.issue)}</div></article>`;
+    }).join("") || '<p class="muted">尚无镜像目录。</p>';
+    document.querySelector("[data-log]").innerHTML = state.log.map(entry => `<li>${escape(entry)}</li>`).join("");
+  }
+  document.addEventListener("click", event => {
+    const target = event.target.closest("button");
+    if (!target || target.disabled) return;
+    if (target.hasAttribute("data-action")) send(JSON.parse(target.dataset.action));
+    else if (target.hasAttribute("data-scene")) { scene = Number(target.dataset.scene); cursor = 0; state = initialState(); render(); }
+    else if (target.hasAttribute("data-step")) { const action = SCENARIOS[scene].steps[cursor].action; cursor += 1; send(action); }
+    else if (target.hasAttribute("data-restart") || target.hasAttribute("data-reset")) { cursor = 0; state = initialState(); render(); }
+    else if (target.hasAttribute("data-submit")) send({ type: "submit", version: document.querySelector("[data-version]").value, target: document.querySelector("[data-target]").value, root: document.querySelector("[data-root]").value });
+    else if (target.hasAttribute("data-advance")) send({ type: "advance" });
+    else if (target.hasAttribute("data-drain")) send({ type: "drain" });
+  });
+  render();
+</script>
+</body>
+</html>
