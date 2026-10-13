@@ -1,0 +1,26 @@
+# 单个 Rust crate：桌面宿主、权威目录和官方网络 Adapter。
+[package]
+name = "nodejs-downloader"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.93.1"
+
+[lib]
+name = "nodejs_downloader"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.2", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.3", features = [] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+tokio = { version = "=1.53.2", features = ["sync", "rt", "macros", "time"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "system-proxy"] }
+semver = "=1.0.28"
+chrono = { version = "=0.4.45", default-features = false, features = ["std"] }
+async-trait = "=0.1.92"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

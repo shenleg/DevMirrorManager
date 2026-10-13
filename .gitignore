@@ -6,3 +6,15 @@
 
 # 本次交互原型的临时验证截图，不作为设计资产维护
 /nodejs-selection-prototype-updated.png
+
+# 前端依赖和构建产物
+/node_modules/
+/dist/
+
+# Rust 编译产物及 Tauri 自动生成的解析文件
+/src-tauri/target/
+/src-tauri/gen/
+
+# 本地运行和验证临时文件；正式证据放在 docs/verification/
+/.local-validation/
+*.log

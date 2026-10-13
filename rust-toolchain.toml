@@ -1,0 +1,5 @@
+# 固定已核实的 Rust 版本，使 macOS 和 Windows 开发使用同一工具链。
+[toolchain]
+channel = "1.93.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
