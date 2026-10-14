@@ -4,10 +4,9 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
-Labels: ready-for-agent
+**Status:** resolved
 
-- [ ] 采用 React + TypeScript、Tauri 2 与单个 Rust crate，应用在约定 macOS/Windows 开发环境可运行；核实并锁定实际工具链与依赖，不宣称已通过安装包验收。
+- [x] 采用 React + TypeScript、Tauri 2 与单个 Rust crate，应用在约定 macOS/Windows 开发环境可运行；核实并锁定实际工具链与依赖，不宣称已通过安装包验收。
 - [x] 上游版本目录来源固定为 Node.js 官方分发来源，校验必要元数据，不内置静态发行版本列表，不接受任意 URL 或自定义镜像地址。
 - [x] 搜索去首尾空白和可选前导 `v`/`V`，按版本号文本前缀匹配；空查询可浏览候选，`22.1` 可匹配 `22.10`，结果按语义版本降序。
 - [x] 发行版本单选，搜索使所选发行版本失配时清除该选择，不自动改选；后续目标选择与下载请求扩展不得改变这一语义。
@@ -21,4 +20,6 @@ Labels: ready-for-agent
 ## Comments
 
 - 2026-10-14：正式 React + TypeScript / Tauri 2 / 单 Rust crate 切片已实现，锁定 Node 24.18.0、npm 11.16.0、Rust 1.93.1 及精确依赖/锁文件。macOS 27.0.1 Apple Silicon 开发模式实际浏览官方 870 条目录，并验证搜索、单选替换、失配清除和主动刷新；截图及测试记录见 [验证记录](../../../docs/verification/release-catalog-search.md)。34 个自动化测试、类型检查、前端生产构建、Rust 检查、格式和 Clippy 通过，完成双轴代码审查。
-- 首项仍未勾选：Windows 开发环境、macOS Intel 和产品系统基线没有本轮实测证据。保留 `ready-for-agent` 供后续补充跨平台验证，不将本票整体标为全平台验收完成。安装包、下载、镜像准备和 nvm 消费验收未实现或未验证，均不在本轮完成声明内。
+- 首轮仅验证本机macOS ARM64，曾因缺Windows证据保留首项未勾选；该缺口已由下述GitHub Actions续轮补齐。产品最低系统基线及完整安装包验收仍是不同门槛，不因本票关闭自动视为通过。
+- 2026-10-14关闭结论：提交`b9db4de3d7dd8ca3171eaece318855abc84fe74d`的[四平台Actions运行38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)全部成功，覆盖macOS ARM64/x64、Windows x64/ARM64的34个业务测试、9个Playwright场景、release打包、真实原生冒烟与目标窗口截图。Windows两个架构完整真实E2E通过，没有降级或跳过。已下载并核对同一SHA、实际架构、成功结果和截图，首项现已勾选，本票标为`resolved`。
+- 关闭范围仅为官方目录浏览/搜索/单选/缓存刷新和开发运行验证。构建包只是CI artifact；安装/升级/卸载、签名公证、精确最低系统基线、下载、镜像准备及nvm消费验收未完成。Windows ARM64验证不自动扩大正式发行承诺。

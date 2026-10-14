@@ -76,17 +76,43 @@
 
 ## GitHub Actions 四平台验证（续轮）
 
-用户更新规则后，多平台验证改由 `.github/workflows/ci.yml` 执行，不再规划其他机器的手动开发验证。矩阵为 macOS ARM64/x64、Windows x64/ARM64；同一提交四平台结果和截图尚待实际运行，不提前声明通过。
+用户更新规则后，多平台验证改由 `.github/workflows/ci.yml` 执行，不再规划其他机器的手动开发验证。**同一提交 `b9db4de3d7dd8ca3171eaece318855abc84fe74d` 的四平台结果全部成功，artifact 已下载，环境/结果 JSON 与截图均已核对。**
+
+最终运行：[GitHub Actions 38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)。各平台均执行34个业务测试、9个Playwright场景、release打包及独立原生冒烟。Windows两个架构的真实应用E2E全部通过，没有降级或跳过。
+
+| 平台 | runner | Rust host | 构建及原生结果 | 应用E2E |
+| --- | --- | --- | --- | --- |
+| macOS ARM64 | `macos-latest` | `aarch64-apple-darwin` | `.app`/ARM64 `.dmg`、原生冒烟及窗口截图通过 | 不使用macOS tauri-driver；此前本机真实操作及浏览器验证已记录 |
+| macOS x64 | `macos-15-intel` | `x86_64-apple-darwin` | `.app`/x64 `.dmg`、原生冒烟及窗口截图通过 | 同上，不冒称macOS WebDriver覆盖 |
+| Windows x64 | `windows-latest` | `x86_64-pc-windows-msvc` | 正式exe、NSIS、原生冒烟及窗口截图通过 | 真实搜索、单选替换、失配清除、刷新全部通过 |
+| Windows ARM64 | `windows-11-arm` | `aarch64-pc-windows-msvc` | 原生ARM64 exe、NSIS验证产物、冒烟及窗口截图通过 | 同样真实通过，不宣称新增正式发行支持 |
+
+已审阅并保存的代表截图：
+- [macOS ARM64 原生窗口](release-catalog-search/ci-38518510776/macos-arm64.png)
+- [macOS x64 原生窗口](release-catalog-search/ci-38518510776/macos-x64.png)
+- [Windows x64 搜索与单选](release-catalog-search/ci-38518510776/windows-x64-selection.png) / [失配清除](release-catalog-search/ci-38518510776/windows-x64-cleared.png)
+- [Windows ARM64 搜索与单选](release-catalog-search/ci-38518510776/windows-arm64-selection.png) / [失配清除](release-catalog-search/ci-38518510776/windows-arm64-cleared.png)
+
+完整日志、浏览器报告、Windows刷新截图、环境与结果JSON、构建包见该运行的 `evidence-*` / `build-*` artifacts（保留14天）；不在Git仓库保存可执行文件。下载内容放入新的独立目录，仅读取证据，不在本机运行其他架构产物。
 
 本轮新增：9个隔离浏览器用户操作测试（本机通过）、feature隔离的真实WebView就绪检查、macOS/Windows目标窗口截图，以及Windows原生WebDriver用户操作脚本。已有34个业务测试保持通过。原生本机冒烟先因缺就绪协议失败，再因旧截图接口不兼容SDK失败，改用ScreenCaptureKit且初始化WindowServer后实际通过，截图已查看。
 
 依赖来源纠正：上轮安装沿用了本机`registry.npmmirror.com`，把来源描述为“官方registry”不准确；本轮锁文件改为`registry.npmjs.org`，显式官方来源`npm ci`成功核验完整性，未修改全局npm设置。
 
-正式release打包本机遇到宏动态库加载错误`mis-aligned LINKEDIT string pool`；全新独立产物目录也复现，排除单纯旧缓存。保持同一目录与工具链，仅启用编译期依赖调试信息后成功生成正式`.app`与`.dmg`（13.07 MiB / 4.58 MiB）。已在`profile.release.build-override`记录该兼容性设置，未开启应用debug或更换工具链；CI最终结果将在运行后追加。
+正式release打包本机遇到宏动态库加载错误`mis-aligned LINKEDIT string pool`；全新独立产物目录也复现，排除单纯旧缓存。保持同一目录与工具链，仅启用编译期依赖调试信息后成功生成正式`.app`与`.dmg`（13.07 MiB / 4.58 MiB）。已在`profile.release.build-override`记录该兼容性设置，未开启应用debug或更换工具链；四平台最终CI结果见上表。
+
+### Windows E2E 失败与实际修复
+
+- 首轮 `38508193346`：两个macOS通过；Windows驱动准备失败。修正新版`Microsoft Edge WebDriver`版本输出和官方ARM64归档名；按微软规则只接受版本号前三段一致的驱动。
+- `38512110450`：Windows驱动准备通过，但两架构`POST /session`超时，业务断言尚未执行。未因超时跳过E2E或将ARM64标为不支持。
+- 最终 `38518510776`：两种Windows runner均记录了原始 `High` (`S-1-16-12288`) 和内层 `Medium` (`S-1-16-8192`) 权限等级；仅改变测试链启动权限后，正式release应用的全部E2E通过。与[微软新版WebView2的高完整性限制](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/security#recommended-privilege-level-for-webview2-host-applications)一致。
+- CI使用用户明确授权的官方`gsudo v2.6.1`，固定SHA-256；不修改ACL、注册表、运行时、应用网络来源或系统保护，不在本机执行Windows工具。正式应用未增加常驻远程调试。
+- Windows x64运行时/驱动为`153.0.4234.48`，ARM64为`154.0.4258.53`。结果JSON确认`  V22.1  `得到真实候选、单选替换、改搜`24.10`清除以及刷新时间更新。
 
 ## 未验证与范围外
 
-- Windows 10 22H2 / Windows 11 x64、macOS Intel、macOS 13 基线：无本轮原生验证证据。
-- 正式安装包、安装/升级/卸载、签名/公证、WebView2 安装行为：未验证且不在本票交付声明内。
+- 四个最新runner平台已完成原生验证，但不能据此推断Windows 10 22H2、macOS 13等产品最低系统基线都通过；这些精确基线仍需后续交付验收。
+- CI已生成`.app`、`.dmg`和NSIS构建产物；安装/升级/卸载、首次系统弹窗、WebView2安装行为、Developer ID签名/公证仍未验证。macOS仅使用ad-hoc签名，不宣称发行者认证或正式安装包交付验收。
+- 托盘、通知、权限弹窗、全局快捷键、自动更新、高DPI、深色模式、输入法等不由当前CI自动证明；未新增这些功能或承诺。
 - 下载、目标文件清单、镜像准备、受支持 LTS 筛选及 nvm 消费链路：未实现；目录成功不等于镜像可用。
 - 网络/解析故障和条件响应由固定数据自动化验证；没有修改生产来源来制造故障，也没有宣称本机实际断网完成全部故障演示。

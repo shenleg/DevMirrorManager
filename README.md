@@ -6,7 +6,9 @@
 
 已在 macOS 27.0.1 / Apple Silicon 验证开发模式。工具链固定为 Node.js 24.18.0、npm 11.16.0、Rust 1.93.1，需安装 Xcode Command Line Tools。
 
-Windows 开发需 MSVC C++ Build Tools（Desktop development with C++）和 WebView2。产品基线为 Windows 10 22H2 / Windows 11、macOS 13；这些基线及 Windows/macOS Intel **尚未实测**。本机结果不等于安装包验收。
+Windows 开发需 MSVC C++ Build Tools（Desktop development with C++）和 WebView2。macOS ARM64/x64、Windows x64/ARM64已在同一提交的GitHub Actions中通过测试、打包、原生冒烟和截图核验；Windows两架构完整E2E通过。具体证据见下方验证记录。
+
+产品基线为 Windows 10 22H2 / Windows 11、macOS 13；最新runner通过不等于每个最低系统版本都已验收，也不证明安装/升级/卸载通过。Windows ARM64目前是验证产物，不自动扩大正式发行支持。
 
 ```sh
 npm ci --registry=https://registry.npmjs.org
@@ -55,13 +57,17 @@ Rust 应用 Module 提供打开、刷新、`snapshot(query)` 和 revision 通知
 npm run test:browser
 npm run tauri -- build --ci
 # 仅本机平台：测试feature构建与正式包隔离，参数为可执行文件和新的证据目录。
-CARGO_TARGET_DIR=target-ci npm run tauri -- build --no-bundle --features ci-smoke
+CARGO_TARGET_DIR="$PWD/src-tauri/target-ci" npm run tauri -- build --no-bundle --features ci-smoke
 npm run test:smoke -- src-tauri/target-ci/release/nodejs-downloader artifacts/local-native
 ```
 
 `ci-smoke` 默认关闭；只有独立测试构建含观察命令，正式安装包没有它。浏览器固定IPC夹具只在`tests/browser/`隔离入口，不进入生产构建，也不是原生网络证据。
 
-构建包仅保存为Actions artifact，不创建Release。四平台同一提交全部绿且查看截图后才记录跨平台开发验证通过。安装/卸载、系统弹窗、签名公证、通知/托盘、高DPI、深色模式、输入法等仍需人工检查，不由CI成功推断。
+构建包仅保存为Actions artifact，不创建Release。[运行38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)的四平台同一提交全部绿，截图与架构已核验，票14的跨平台开发验证完成。
+
+Windows E2E先记录权限级别，必要时用固定官方`gsudo`降到普通权限，避免新版WebView2在高完整性宿主下忽略驱动配置；不修改ACL、注册表或系统保护。
+
+安装/卸载、系统弹窗、签名公证、通知/托盘、高DPI、深色模式、输入法等仍需人工检查，不由CI成功推断。
 
 首次版本的锁文件曾使用本机配置的`npmmirror`来源；本轮已改为官方`registry.npmjs.org`并用`npm ci`核实包完整性，没有修改全局npm配置。
 
