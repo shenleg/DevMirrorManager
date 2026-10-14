@@ -78,7 +78,7 @@
 
 用户更新规则后，多平台验证改由 `.github/workflows/ci.yml` 执行，不再规划其他机器的手动开发验证。**同一提交 `b9db4de3d7dd8ca3171eaece318855abc84fe74d` 的四平台结果全部成功，artifact 已下载，环境/结果 JSON 与截图均已核对。**
 
-最终运行：[GitHub Actions 38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)。各平台均执行34个业务测试、9个Playwright场景、release打包及独立原生冒烟。Windows两个架构的真实应用E2E全部通过，没有降级或跳过。
+首次完整通过运行：[GitHub Actions 38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)。各平台均执行34个业务测试、9个Playwright场景、release打包及独立原生冒烟。Windows两个架构的真实应用E2E全部通过，没有降级或跳过。
 
 | 平台 | runner | Rust host | 构建及原生结果 | 应用E2E |
 | --- | --- | --- | --- | --- |
@@ -109,11 +109,21 @@
 - CI使用用户明确授权的官方`gsudo v2.6.1`，固定SHA-256；不修改ACL、注册表、运行时、应用网络来源或系统保护，不在本机执行Windows工具。正式应用未增加常驻远程调试。
 - Windows x64运行时/驱动为`153.0.4234.48`，ARM64为`154.0.4258.53`。结果JSON确认`  V22.1  `得到真实候选、单选替换、改搜`24.10`清除以及刷新时间更新。
 
-### 收尾复跑出现截图超时（待复验）
+### 收尾复跑截图超时及修复后的实际复验
 
 纯文档提交`d03c48d`的[运行38524262778](https://github.com/shenleg/DevMirrorManager/actions/runs/38524262778)中，Windows两架构和macOS ARM64通过，macOS x64的权威WebView就绪成功，但目标窗口截图超时，capture.log为空。不能据此区分Swift解释器冷编译与捕获API等待，亦不将其冒称功能回归已确认。
 
-当前修复将Swift辅助程序编译单独记录（有界120秒），窗口捕获仍保持30秒硬门槛，增加实际API阶段日志。本机ARM64原生冒烟通过，其他平台仅在CI复验。票据暂重开，等待新提交四平台结果；上述历史成功证据没有被改写。
+修复将Swift辅助程序编译单独记录（有界120秒），窗口捕获仍保持30秒硬门槛，增加实际API阶段日志。本机ARM64原生冒烟通过，其他平台仅在CI复验。
+
+**最新复验：[运行38528925495](https://github.com/shenleg/DevMirrorManager/actions/runs/38528925495)，提交`346aa5f7ff23e85351bfe9f34e1762c27d66118f`，四个平台全部成功。** 已下载并核对四平台`host.json`同一SHA和真实架构、原生`result.json`、Windows完整E2E结果；本轮四平台截图均已查看。macOS x64日志分别记录编译退出0、获取共享窗口、捕获目标窗口及截图退出0；没有合并计时或跳过截图。不能从本轮成功倒推上轮唯一根因，但验证链现在提供了可区分的阶段证据。
+
+本轮长期保存的代表截图：
+- [macOS x64](release-catalog-search/ci-38528925495/macos-x64.png)
+- [macOS ARM64](release-catalog-search/ci-38528925495/macos-arm64.png)
+- [Windows x64 E2E刷新完成](release-catalog-search/ci-38528925495/windows-x64.png)
+- [Windows ARM64 E2E刷新完成](release-catalog-search/ci-38528925495/windows-arm64.png)
+
+全部开发运行验收项再次满足，票14恢复`resolved`；历史成功、失败、重开与复验记录均保留，不宣称所有安装包或系统交互已验收。
 
 ## 未验证与范围外
 

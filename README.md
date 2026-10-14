@@ -63,7 +63,7 @@ npm run test:smoke -- src-tauri/target-ci/release/nodejs-downloader artifacts/lo
 
 `ci-smoke` 默认关闭；只有独立测试构建含观察命令，正式安装包没有它。浏览器固定IPC夹具只在`tests/browser/`隔离入口，不进入生产构建，也不是原生网络证据。
 
-构建包仅保存为Actions artifact，不创建Release。[运行38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)的四平台同一提交全部绿，截图与架构已核验。后续纯文档提交的macOS x64截图复跑超时，票14暂重开以修复CI可靠性；最新状态以验证记录为准，不将该失败隐藏。
+构建包仅保存为Actions artifact，不创建Release。[运行38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)的四平台同一提交全部绿，截图与架构已核验。后续复跑曾发生macOS x64截图超时；分离Swift编译与捕获计时后，[运行38528925495](https://github.com/shenleg/DevMirrorManager/actions/runs/38528925495)的同一修复提交四平台再次全部通过，本轮新截图已核验，票14恢复关闭。失败和复验过程仍保留在验证记录中。
 
 Windows E2E先记录权限级别，必要时用固定官方`gsudo`降到普通权限，避免新版WebView2在高完整性宿主下忽略驱动配置；不修改ACL、注册表或系统保护。
 

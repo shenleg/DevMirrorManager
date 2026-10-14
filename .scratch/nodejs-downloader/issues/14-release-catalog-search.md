@@ -4,8 +4,7 @@
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
-Labels: ready-for-agent
+**Status:** resolved
 
 - [x] 采用 React + TypeScript、Tauri 2 与单个 Rust crate，应用在约定 macOS/Windows 开发环境可运行；核实并锁定实际工具链与依赖，不宣称已通过安装包验收。
 - [x] 上游版本目录来源固定为 Node.js 官方分发来源，校验必要元数据，不内置静态发行版本列表，不接受任意 URL 或自定义镜像地址。
@@ -24,4 +23,5 @@ Labels: ready-for-agent
 - 首轮仅验证本机macOS ARM64，曾因缺Windows证据保留首项未勾选；该缺口已由下述GitHub Actions续轮补齐。产品最低系统基线及完整安装包验收仍是不同门槛，不因本票关闭自动视为通过。
 - 2026-10-14关闭结论：提交`b9db4de3d7dd8ca3171eaece318855abc84fe74d`的[四平台Actions运行38518510776](https://github.com/shenleg/DevMirrorManager/actions/runs/38518510776)全部成功，覆盖macOS ARM64/x64、Windows x64/ARM64的34个业务测试、9个Playwright场景、release打包、真实原生冒烟与目标窗口截图。Windows两个架构完整真实E2E通过，没有降级或跳过。已下载并核对同一SHA、实际架构、成功结果和截图，首项现已勾选，本票标为`resolved`。
 - 2026-10-14复验暂重开：纯文档提交`d03c48d`的运行`38524262778`中，其他三平台通过，macOS x64在真实WebView就绪后截图辅助30秒超时。此前`b9db4de`四平台通过证据仍有效，但当前CI可靠性修复须重新取得四平台结果，暂不维持最新分支全绿的完成声明。已将Swift冷编译与窗口捕获分开计时，并增加阶段诊断；不跳过截图、不扩大30秒捕获门槛。
+- 2026-10-14恢复关闭：修复提交`346aa5f7ff23e85351bfe9f34e1762c27d66118f`的[运行38528925495](https://github.com/shenleg/DevMirrorManager/actions/runs/38528925495)四平台全部通过。已下载并核对同一SHA和架构、查看本轮四平台新截图；macOS x64编译与截图阶段均明确成功，Windows两架构完整E2E再次通过。历史截图超时记录保留，本票恢复`resolved`。
 - 关闭范围仅为官方目录浏览/搜索/单选/缓存刷新和开发运行验证。构建包只是CI artifact；安装/升级/卸载、签名公证、精确最低系统基线、下载、镜像准备及nvm消费验收未完成。Windows ARM64验证不自动扩大正式发行承诺。
