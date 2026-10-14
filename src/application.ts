@@ -1,5 +1,5 @@
 /** 职责：通过 IPC 读取目录与清单事实，协调连接及发行版本/目标草稿，不复制 Rust 领域规则。 */
-import type { CatalogAdapter, CatalogSnapshot, Target } from './catalog';
+import type { CatalogAdapter, CatalogSnapshot, Selection, Target } from './catalog';
 
 /** 界面展示快照；catalog 不代表本地镜像，selectedVersion 仅为本次会话草稿。 */
 export interface ApplicationSnapshot {
@@ -28,7 +28,7 @@ export interface CatalogApplication {
   select(version: string): Promise<void>;
   /** 更新独立目标草稿并只读取快照；target 为所浏览的平台，返回完成承诺，IPC异常转为错误，订阅者异常可能拒绝。 */
   setTarget(target: Target): Promise<void>;
-  /** 主动重试当前清单错误；无参数，返回完成承诺，IPC 异常转为展示错误。 */
+  /** 主动准备idle清单或重试当前清单错误；无参数，返回完成承诺，IPC异常转为展示错误。 */
   retryPreview(): Promise<void>;
   /** 返回当前稳定展示快照；无参数，不抛出异常。 */
   getSnapshot(): ApplicationSnapshot;
@@ -57,6 +57,22 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
     for (const subscriber of subscribers) subscriber();
   }
 
+  /** 读取query/selection的权威事实；sequence/epoch标识读取世代，返回有效快照或过时null，IPC失败时拒绝。 */
+  async function readSnapshot(query: string, selection: Selection, sequence: number, epoch: number) {
+    while (true) {
+      const catalog = await adapter.snapshot(query, selection);
+      // 普通读取与恢复读取必须使用相同隔离；迟到恢复不能清除新输入或新连接的选择。
+      if (sequence !== querySequence || epoch !== connectionEpoch || !state.connected) return null;
+      // 通知只提供下界；过期或错误身份快照必须补读，不能依赖下一次通知救回状态。
+      if (catalog.revision < highestRevision || catalog.query !== query
+          || catalog.preview.selection.version !== selection.version
+          || catalog.preview.selection.target.os !== selection.target.os
+          || catalog.preview.selection.target.arch !== selection.target.arch) continue;
+      highestRevision = catalog.revision;
+      return catalog;
+    }
+  }
+
   /** 读取当前query与selection；只接受本轮身份和revision下界，返回完成承诺，IPC失败转为展示错误。 */
   async function readCatalog() {
     const sequence = ++querySequence;
@@ -65,19 +81,8 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
     const selection = { version: state.selectedVersion, target: { ...state.target } };
     update({ ...state, querying: true, error: null });
     try {
-      let catalog: CatalogSnapshot;
-      while (true) {
-        catalog = await adapter.snapshot(query, selection);
-        // 较慢的旧查询不能覆盖新输入，也不能误清除新输入下的草稿。
-        if (sequence !== querySequence || epoch !== connectionEpoch || !state.connected) return;
-        // 通知只提供下界；过期快照必须补读，否则会永远停留在漏通知的旧目录。
-        if (catalog.revision < highestRevision || catalog.query !== query
-            || catalog.preview.selection.version !== selection.version
-            || catalog.preview.selection.target.os !== selection.target.os
-            || catalog.preview.selection.target.arch !== selection.target.arch) continue;
-        highestRevision = catalog.revision;
-        break;
-      }
+      const catalog = await readSnapshot(query, selection, sequence, epoch);
+      if (!catalog) return;
       // 刷新失败不撤销已校验目录；是否失配取决于完成查询的实体，而非刷新状态。
       const mismatch = catalog.hasCatalog && state.selectedVersion
         && !catalog.releases.some((release) => release.version === state.selectedVersion);
@@ -91,11 +96,47 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
       // 清草稿后须重新向 Rust 读取 unselected；不能把原发行版本的成功清单当成当前预览。
       if (mismatch) await readCatalog();
     } catch (error) {
+      if (sequence !== querySequence || epoch !== connectionEpoch || !state.connected) return;
+      if (selection.version !== null) {
+        try {
+          // Rust严格校验目录成员；先以无version读取同query/target，只有权威结果确认失配才能清草稿。
+          const recovery = await readSnapshot(query, { version: null, target: selection.target }, sequence, epoch);
+          if (!recovery) return;
+          if (state.selectedVersion === selection.version && recovery.hasCatalog
+              && !recovery.releases.some((release) => release.version === selection.version)) {
+            update({ ...state, catalog: recovery, selectedVersion: null, querying: false, error: null, previewError: null,
+              feedback: '当前发行版本不再符合搜索，已清除单选；不会自动改选。' });
+            return;
+          }
+        } catch {
+          // 恢复失败不能替代最初原因，也不能把无法读取目录误称为发行版本已失配。
+        }
+      }
       if (sequence === querySequence && epoch === connectionEpoch && state.connected) {
         update({ ...state, querying: false, error: error instanceof Error ? error.message : String(error) });
       }
     }
   }
+  /** 准备当前选择的清单；retry表示用户主动操作，返回完成承诺，IPC错误转为反馈，订阅者异常可能拒绝。 */
+  async function prepareSelected(retry: boolean) {
+    const epoch = connectionEpoch;
+    const version = state.selectedVersion;
+    const preparation = ++preparationSequence;
+    ++querySequence;
+    update({ ...state, previewError: null });
+    try {
+      await adapter.preparePreview({ version, target: { ...state.target } }, retry);
+      // 清单按发行版本复用；同版本切目标或改查询后仍须补读，不能依赖每次通知都送达。
+      if (preparation === preparationSequence && epoch === connectionEpoch && state.connected && state.selectedVersion === version) await readCatalog();
+    } catch (error) {
+      if (preparation !== preparationSequence || epoch !== connectionEpoch || !state.connected || state.selectedVersion !== version) return;
+      const preview = state.catalog?.preview;
+      // 回执只能说明IPC传输；同版本已有加载或结果事实时，不得将真实状态降级成命令失败。
+      if (preview?.selection.version === version && !['idle', 'unselected'].includes(preview.status)) return;
+      update({ ...state, previewError: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
   return {
     async connect() {
       if (state.connected) return;
@@ -154,19 +195,8 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
       if (state.connected && !state.querying && state.catalog?.hasCatalog
           && state.catalog.query === state.query
           && state.catalog.releases.some((release) => release.version === version)) {
-        const epoch = connectionEpoch;
-        const preparation = ++preparationSequence;
-        ++querySequence;
-        update({ ...state, selectedVersion: version, feedback: '', previewError: null });
-        try {
-          await adapter.preparePreview({ version, target: { ...state.target } }, false);
-          // 清单按发行版本复用；同版本切目标或改查询后仍须补读，不能依赖每次通知都送达。
-          if (preparation === preparationSequence && epoch === connectionEpoch && state.connected && state.selectedVersion === version) await readCatalog();
-        } catch (error) {
-          if (preparation === preparationSequence && epoch === connectionEpoch && state.connected && state.selectedVersion === version) {
-            update({ ...state, previewError: error instanceof Error ? error.message : String(error) });
-          }
-        }
+        update({ ...state, selectedVersion: version, feedback: '' });
+        await prepareSelected(false);
       }
     },
     async setTarget(target) {
@@ -178,21 +208,8 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
     },
     async retryPreview() {
       if (!state.connected || !initialized || !state.selectedVersion || state.querying
-          || (!state.previewError && state.catalog?.preview.status !== 'error')) return;
-      const epoch = connectionEpoch;
-      const version = state.selectedVersion;
-      const preparation = ++preparationSequence;
-      ++querySequence;
-      update({ ...state, previewError: null });
-      try {
-        await adapter.preparePreview({ version, target: { ...state.target } }, true);
-        // 与首次准备保持相同版本身份；目标变化不使该发行版本的主动重试失效。
-        if (preparation === preparationSequence && epoch === connectionEpoch && state.connected && state.selectedVersion === version) await readCatalog();
-      } catch (error) {
-        if (preparation === preparationSequence && epoch === connectionEpoch && state.connected && state.selectedVersion === version) {
-          update({ ...state, previewError: error instanceof Error ? error.message : String(error) });
-        }
-      }
+          || (!state.previewError && state.catalog?.preview.status !== 'error' && state.catalog?.preview.status !== 'idle')) return;
+      await prepareSelected(true);
     },
     getSnapshot: () => state,
     subscribe(listener) {

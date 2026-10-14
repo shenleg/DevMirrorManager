@@ -106,8 +106,8 @@ export function App({ adapter }: { adapter?: CatalogAdapter }) {
                 ? '正在读取当前选择的权威预览，文件存在性待确认。' : previewMessages.unselected}
             </div>
             {(state.previewError ?? preview?.error) && <p className="message error" role="alert">{state.previewError ?? preview?.error}</p>}
-            {(preview?.status === 'error' || state.previewError) && <button type="button" disabled={!state.connected || state.querying}
-              onClick={() => { void application.retryPreview(); }}>重试清单</button>}
+            {(preview?.status === 'idle' || preview?.status === 'error' || state.previewError) && <button type="button" disabled={!state.connected || state.querying}
+              onClick={() => { void application.retryPreview(); }}>{preview?.status === 'idle' && !state.previewError ? '准备清单' : '重试清单'}</button>}
             {preview && preview.required.length > 0 && <ul className="artifact-list" aria-label="必需分发文件">
               {preview.required.map((artifact) => <li key={artifact.path} data-artifact-path={artifact.path}
                 data-present={artifact.present === null ? 'unknown' : artifact.present ? 'present' : 'missing'}

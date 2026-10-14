@@ -130,12 +130,16 @@ pub const READY_SCRIPT: &str = r#"
   if (window.__ciSmokeStarted) return;
   window.__ciSmokeStarted = true;
   const { invoke } = window.__TAURI_INTERNALS__;
+  // 90 秒覆盖一次官方目录/清单请求与控件响应；100 毫秒轮询避免忙等，不承诺用户网络 SLA。
   const deadline = Date.now() + 90000;
+  /** 等待下一轮观察；无参数，返回等待完成承诺，不抛异常。 */
   const sleep = () => new Promise(resolve => setTimeout(resolve, 100));
+  /** 读取控件中的草稿；无参数，返回当前发行版本/目标，缺失控件保持未知，不抛异常。 */
   const selection = () => ({
     version: document.querySelector('input[name="release"]:checked')?.value ?? null,
     target: { os: document.querySelector('#target-os')?.value, arch: document.querySelector('#target-arch')?.value }
   });
+  /** 读取实际渲染的文件事实；无参数，返回可与 Rust 核对的预览，不产生候选、不抛异常。 */
   const domPreview = () => ({
     selection: selection(),
     status: document.querySelector('#preview-panel')?.dataset.previewStatus,
@@ -147,10 +151,12 @@ pub const READY_SCRIPT: &str = r#"
     })),
     error: document.querySelector('#preview-panel [role="alert"]')?.textContent?.trim() || null
   });
+  /** 比较 a 页面事实与 b 权威快照；返回身份与事实是否完全一致，输入畸形时抛出访问错误。 */
   const samePreview = (a, b) => a.status === b.status && a.source === b.source && a.error === b.error
     && a.selection.version === b.selection.version
     && a.selection.target.os === b.selection.target.os && a.selection.target.arch === b.selection.target.arch
     && JSON.stringify(a.required) === JSON.stringify(b.required);
+  /** 在预算内观察 probe，accepted 判定就绪，label 定位阶段；返回首个就绪结果，超时或观察/判定失败抛出。 */
   const wait = async (label, probe, accepted) => {
     let observed;
     while (Date.now() < deadline) {
@@ -160,14 +166,17 @@ pub const READY_SCRIPT: &str = r#"
     }
     throw new Error(label + '超时：' + JSON.stringify(observed));
   };
+  /** 对 id 目标控件选择 value 并发送原生 change；无返回值，控件不存在或禁用时抛出。 */
   const setTarget = (id, value) => {
     const input = document.querySelector(id);
     if (!input || input.disabled) throw new Error('目标控件不可操作：' + id);
     input.value = value;
     input.dispatchEvent(new Event('change', { bubbles: true }));
   };
+  /** 输入原始搜索 value 并发送原生 input；无返回值，控件不存在或原生 setter 不可用时抛出。 */
   const search = value => {
     const input = document.querySelector('#release-query');
+    // 直接赋值会同步 React 的输入跟踪而吞掉变化；原生 setter + input 才能走正式 onChange，不直接改 React 状态。
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
   };
@@ -180,12 +189,14 @@ pub const READY_SCRIPT: &str = r#"
         && snapshot.releases.length > 0 && radios.length === snapshot.releases.length
         && document.querySelector('#catalog-status')?.textContent.includes('目录就绪');
     });
+    /** 读取 id 下拉框的全部选项；返回有序值列表，控件缺失时抛出，不按宿主过滤。 */
     const options = id => [...document.querySelector(id).options].map(option => option.value);
     if (JSON.stringify(options('#target-os')) !== JSON.stringify(['macos', 'windows', 'linux'])
         || JSON.stringify(options('#target-arch')) !== JSON.stringify(['x64', 'arm64'])) {
       throw new Error('系统与架构选项未完整提供');
     }
     const version = initial.releases[0].version;
+    /** 点击本轮官方目录的 version；无参数或返回值，候选不存在或不可操作时抛出。 */
     const select = () => {
       const radio = [...document.querySelectorAll('input[name="release"]')].find(radio => radio.value === version);
       if (!radio || radio.matches(':disabled')) throw new Error('发行版本不可选择');

@@ -72,6 +72,21 @@ function controlledIpc(autoPreparation = true) {
 }
 
 describe('正式目录界面用户操作', () => {
+  /** 验证权威idle在没有旧IPC错误时仍显示主动准备入口，点击后读取真实进度。 */
+  it('idle预览提供准备清单按钮而不自动重试', async () => {
+    const ipc = controlledIpc(false);
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    await ipc.respond(1, snapshot('', { preview: { selection: ipc.requests[1]!.selection, status: 'idle', source: null, required: [], error: null } }));
+    expect(ipc.preparations).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '准备清单' }));
+    await ipc.respond(2, snapshot('', { revision: 2, preview: { selection: ipc.requests[2]!.selection, status: 'loading', source: null, required: [], error: null } }));
+    expect(ipc.preparations.at(-1)).toEqual({ selection: { version: 'v24.10.0', target: { os: 'macos', arch: 'x64' } }, retry: true });
+    expect(screen.queryByRole('button', { name: '准备清单' })).toBeNull();
+    expect(screen.getByRole('region', { name: '目标平台与必需文件预览' }).getAttribute('data-preview-status')).toBe('loading');
+  });
   /** 验证正式页面始终提供原生独立目标控件，并逐项渲染外部权威事实和清单来源。 */
   it('Windows预览显示权威7z和hash而没有下载入口', async () => {
     const ipc = controlledIpc(false);
@@ -117,8 +132,8 @@ describe('正式目录界面用户操作', () => {
     expect(panel.getAttribute('data-preview-status')).toBe('idle');
   });
 
-  /** 验证清单失败只影响预览区，重试命令失败不伪报目录错误或目标不支持。 */
-  it('清单错误与重试IPC失败只在预览区域展示原因', async () => {
+  /** 验证权威清单失败优先于重试IPC回执，始终保留预览原因和重试入口而不污染目录。 */
+  it('清单权威错误不会被重试IPC失败遮蔽', async () => {
     const ipc = controlledIpc(false);
     render(<App adapter={{ ...ipc.adapter, preparePreview: async (selection, retry) => {
       if (retry) throw new Error('清单重试IPC中断');
@@ -136,7 +151,8 @@ describe('正式目录界面用户操作', () => {
     expect(previewPanel.getByRole('alert').textContent).toBe('清单获取超时');
     expect(previewPanel.getByText('存在性待确认')).toBeDefined();
     await user.click(previewPanel.getByRole('button', { name: '重试清单' }));
-    expect(previewPanel.getByRole('alert').textContent).toBe('清单重试IPC中断');
+    expect(previewPanel.getByRole('alert').textContent).toBe('清单获取超时');
+    expect(previewPanel.getByRole('button', { name: '重试清单' })).toBeDefined();
     expect(catalogPanel.queryByRole('alert')).toBeNull();
     expect(catalogPanel.getByRole('status').textContent).toContain('目录就绪');
     expect(screen.queryByText(/目标不支持/)).toBeNull();

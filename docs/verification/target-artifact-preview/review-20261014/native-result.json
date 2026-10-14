@@ -1,0 +1,155 @@
+{
+  "status": "passed",
+  "platform": "darwin",
+  "arch": "arm64",
+  "readiness": {
+    "arch": "aarch64",
+    "checkedAt": 1791986069324,
+    "count": 870,
+    "os": "macos",
+    "previews": [
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-darwin-x64.tar.xz",
+            "present": true,
+            "sha256": "68a8a4de0c46e693a261d13efb43d041fcd7386187816ef9a4b14bf60003adb2"
+          },
+          {
+            "path": "node-v26.11.1-darwin-x64.tar.gz",
+            "present": true,
+            "sha256": "9a8129bd9ab08039793dd1143a7aedee6b5d60ac06592ad938d8bddf36142f3a"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "x64",
+            "os": "macos"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      },
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-darwin-arm64.tar.xz",
+            "present": true,
+            "sha256": "0ef9b443000681bffc062ec126d53f97933ea9b086ea73dcba0480d87e639b39"
+          },
+          {
+            "path": "node-v26.11.1-darwin-arm64.tar.gz",
+            "present": true,
+            "sha256": "d916511b55965e91be7a88e17f88d895b6793ceaba3e6c9b194aefe51c2c65ac"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "arm64",
+            "os": "macos"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      },
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-win-x64.7z",
+            "present": true,
+            "sha256": "4264e52430ee687e774a49725ec7c32040c830c1e1106de019fde4ed36d4c06b"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "x64",
+            "os": "windows"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      },
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-win-arm64.7z",
+            "present": true,
+            "sha256": "b43b2118d28c9975df37772ea6c2dd1d67a05254c95d1cd576169dada8a9c855"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "arm64",
+            "os": "windows"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      },
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-linux-x64.tar.xz",
+            "present": true,
+            "sha256": "3883bfc73f9a680ca4eab04b196068aaaab1373ffa77d8fc1a4408222495b651"
+          },
+          {
+            "path": "node-v26.11.1-linux-x64.tar.gz",
+            "present": true,
+            "sha256": "15fc043a51a5783f2f4b634561091658f5a7f0e3db03f997dca3a8033a33e45b"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "x64",
+            "os": "linux"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      },
+      {
+        "error": null,
+        "required": [
+          {
+            "path": "node-v26.11.1-linux-arm64.tar.xz",
+            "present": true,
+            "sha256": "0945e2cde6aa0f54d980f03874dfe5cf3a549ce714c7fb9019e591ce0accf282"
+          },
+          {
+            "path": "node-v26.11.1-linux-arm64.tar.gz",
+            "present": true,
+            "sha256": "170454fb022f5e9b5f6cc76c25fa32ef5100895be44eb04e92f9780591491bbf"
+          }
+        ],
+        "selection": {
+          "target": {
+            "arch": "arm64",
+            "os": "linux"
+          },
+          "version": "v26.11.1"
+        },
+        "source": "https://nodejs.org/dist/v26.11.1/SHASUMS256.txt",
+        "status": "ready"
+      }
+    ],
+    "reason": null,
+    "rejectedInputs": 3,
+    "revision": 5,
+    "source": "https://nodejs.org/dist/index.json",
+    "status": "passed",
+    "targetPreserved": true,
+    "versionPreserved": true
+  },
+  "screenshot": "native-window.png"
+}

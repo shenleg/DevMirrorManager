@@ -56,6 +56,15 @@ node scripts/ci/native-smoke.mjs src-tauri/target-ci/release/nodejs-downloader .
 
 浏览器截图来自受控 IPC 展示样例，路径、hash、日期与清单状态不作为官方事实。1050×780、390×844、360×480 无横向溢出；窄窗口可纵向滚动访问完整文件、来源与重试控件。原生截图只捕获真实窗口可见区域，不冒充全页面截图。
 
+## 代码评审
+
+评审基线固定为 `64c31faba44d40121a982d7cd86c0300ad277d6f`，首轮评审提交为 `66fa7ac`。
+
+- Standards：两项原生观察脚本文档注释问题已补齐，并说明 React 原生 setter 的 why；首次准备／重试共用 `prepareSelected`，收口重复竞态处理。局部测试夹具重复仅为非阻塞建议，因公开 seam 与 React `act` 控制不同而暂保留，不新增通用测试框架。
+- Spec：三项复现均先补失败回归再修复：重连后 `idle` 提供用户主动“准备清单”入口，不自动获取；目录成员校验失败时仅由无发行版本的同查询／目标权威快照确认失配并清草稿；同发行版本已有权威加载／结果时，迟到 IPC 回执不能降级或遮盖它。Rust 输入校验未放松，恢复读取仍验证完整身份、revision 下界与连接世代。未发现范围外下载功能。
+- 修复后本机重新全量验证：前端 **44 项**（31 应用 Interface + 13 正式界面）、Rust 22 项、浏览器 14 项全部通过；正式 ARM64 打包与独立原生复验通过。新增[原生窗口](target-artifact-preview/review-20261014/macos-arm64.png)、[原生结果](target-artifact-preview/review-20261014/native-result.json)、[最小窗口](target-artifact-preview/review-20261014/browser-preview-minimum.png)和[失败／重试](target-artifact-preview/review-20261014/browser-preview-error-minimum.png)均已查看，早期证据未覆盖。
+- 用户已授权评审收尾后推送功能分支跑现有四平台 CI；授权不包括推送 `main`、修改 CI 或 CI 失败后的额外重推。
+
 ## 后续下载接入约束
 
 票 16 接入真实下载时，应通过同一 Rust `Application::snapshot_with_selection` 取得权威必需文件与清单条件，不能仅信任前端的 `ready` 或重新拼一套支持规则。`Application::raw_manifest` 提供成功实体的原始字节，后续原样保存必须复用它；预览中的预期 SHA-256 不能替代对实际归档字节的校验。本票没有创建下载请求或文件任务。

@@ -76,6 +76,161 @@ function controlledIpc(autoPreparation = true) {
 }
 
 describe('前端目录应用公开 Interface', () => {
+  /** 验证null-version恢复同样补读revision下界与完整身份，并隔离旧查询/旧连接，不能迟到清新草稿。 */
+  it('membership恢复隔离旧查询连接并补读身份与revision', async () => {
+    const ipc = controlledIpc(false);
+    const app = createCatalogApplication(ipc.adapter);
+    const connecting = app.connect();
+    (await ipc.request(0)).response.resolve(snapshot());
+    await connecting;
+    const selecting = app.select('v24.10.0');
+    const selected = await ipc.request(1);
+    selected.response.resolve(snapshot('', { preview: { selection: selected.selection, status: 'idle', source: null, required: [], error: null } }));
+    await selecting;
+    const obsolete = app.setQuery('99');
+    (await ipc.request(2)).response.reject(new Error('membership拒绝'));
+    const obsoleteRecovery = await ipc.request(3);
+    const latest = app.setQuery('24');
+    const current = await ipc.request(4);
+    current.response.resolve(snapshot('24', { preview: { selection: current.selection, status: 'idle', source: null, required: [], error: null } }));
+    await latest;
+    obsoleteRecovery.response.resolve(snapshot('99', { revision: 99, releases: [] }));
+    await obsolete;
+    expect(app.getSnapshot()).toMatchObject({ selectedVersion: 'v24.10.0', query: '24', catalog: { revision: 1 } });
+    const disconnected = app.setQuery('98');
+    (await ipc.request(5)).response.reject(new Error('membership拒绝'));
+    const oldConnection = await ipc.request(6);
+    app.disconnect();
+    const reconnecting = app.connect();
+    const reconnected = await ipc.request(7);
+    reconnected.response.resolve(snapshot('98', { preview: { selection: reconnected.selection, status: 'idle', source: null, required: [], error: null } }));
+    await reconnecting;
+    oldConnection.response.resolve(snapshot('98', { revision: 100, releases: [] }));
+    await disconnected;
+    expect(app.getSnapshot().selectedVersion).toBe('v24.10.0');
+    const recovering = app.setQuery('97');
+    (await ipc.request(8)).response.reject(new Error('membership拒绝'));
+    const stale = await ipc.request(9);
+    ipc.notify(5);
+    stale.response.resolve(snapshot('97', { revision: 4, releases: [] }));
+    const wrongIdentity = await ipc.request(10);
+    wrongIdentity.rawResolve(snapshot('97', { revision: 5, releases: [], preview: {
+      selection: { version: null, target: { os: 'windows', arch: 'arm64' } }, status: 'unselected', source: null, required: [], error: null,
+    } }));
+    (await ipc.request(11)).response.resolve(snapshot('97', { revision: 5, releases: [] }));
+    await recovering;
+    expect(app.getSnapshot()).toMatchObject({ selectedVersion: null, querying: false, catalog: { revision: 5, preview: { status: 'unselected', selection: { version: null, target: { os: 'macos', arch: 'x64' } } } } });
+    app.disconnect();
+  });
+  /** 验证命令回执晚于通知事实时，ready/missing/loading/权威error均不能被迟到传输失败遮蔽。 */
+  it('通知已确认prepare或retry进度后忽略迟到失败回执', async () => {
+    for (const retry of [false, true]) {
+      for (const status of ['ready', 'missing', 'loading', 'error'] as const) {
+        const ipc = controlledIpc(false);
+        const receipt = deferred<void>();
+        const app = createCatalogApplication({ ...ipc.adapter, preparePreview: (selection, requestedRetry) => {
+          return requestedRetry === retry ? receipt.promise : ipc.adapter.preparePreview(selection, requestedRetry);
+        } });
+        const connecting = app.connect();
+        (await ipc.request(0)).response.resolve(snapshot());
+        await connecting;
+        let pending = app.select('v24.10.0');
+        let index = 1;
+        if (retry) {
+          const initial = await ipc.request(index++);
+          initial.response.resolve(snapshot('', { preview: { selection: initial.selection, status: 'error', source: null, required: [], error: '之前的清单错误' } }));
+          await pending;
+          pending = app.retryPreview();
+        }
+        ipc.notify(2);
+        const confirmed = await ipc.request(index);
+        confirmed.response.resolve(snapshot('', { revision: 2, preview: {
+          selection: confirmed.selection, status, source: null, required: [], error: status === 'error' ? '本次权威清单错误' : null,
+        } }));
+        await vi.waitFor(() => expect(app.getSnapshot().querying).toBe(false));
+        receipt.reject(new Error('迟到准备回执IPC失败'));
+        await pending;
+        expect(app.getSnapshot()).toMatchObject({ previewError: null, catalog: { preview: { status, error: status === 'error' ? '本次权威清单错误' : null } } });
+        app.disconnect();
+      }
+    }
+  });
+  /** 验证恢复读取不是随意清选择的后门：目录未知、仍包含原选择或再次失败时保留原choice与原始错误。 */
+  it('恢复快照不能确认失配时保留选择及首个错误', async () => {
+    for (const mode of ['contains', 'unavailable', 'reject']) {
+      const ipc = controlledIpc(false);
+      const app = createCatalogApplication(ipc.adapter);
+      const connecting = app.connect();
+      (await ipc.request(0)).response.resolve(snapshot());
+      await connecting;
+      const selecting = app.select('v24.10.0');
+      const selected = await ipc.request(1);
+      selected.response.resolve(snapshot('', { preview: { selection: selected.selection, status: 'ready', source: null, required: [], error: null } }));
+      await selecting;
+      const searching = app.setQuery('24');
+      (await ipc.request(2)).response.reject(new Error('原始查询IPC错误'));
+      const recovery = await ipc.request(3);
+      if (mode === 'reject') recovery.response.reject(new Error('恢复读取IPC错误'));
+      else recovery.response.resolve(snapshot('24', mode === 'unavailable' ? { hasCatalog: false, releases: [], status: 'loading' } : {}));
+      await searching;
+      expect(app.getSnapshot()).toMatchObject({ selectedVersion: 'v24.10.0', querying: false, error: '原始查询IPC错误', catalog: { query: '' } });
+      app.disconnect();
+    }
+  });
+  /** 验证Rust因目录移除所选发行版本而拒绝时，空version权威查询可确认失配并恢复浏览。 */
+  it('membership拒绝后用无version权威结果清草稿且保留目标', async () => {
+    const ipc = controlledIpc(false);
+    const app = createCatalogApplication(ipc.adapter);
+    await app.setTarget({ os: 'linux', arch: 'arm64' });
+    const connecting = app.connect();
+    (await ipc.request(0)).response.resolve(snapshot());
+    await connecting;
+    const selecting = app.select('v24.10.0');
+    const selected = await ipc.request(1);
+    selected.response.resolve(snapshot('', { preview: { selection: selected.selection, status: 'ready', source: null, required: [], error: null } }));
+    await selecting;
+    const searching = app.setQuery('24.9');
+    (await ipc.request(2)).response.reject(new Error('发行版本已不属于已校验目录'));
+    const recovery = await ipc.request(3);
+    expect(recovery.selection).toEqual({ version: null, target: { os: 'linux', arch: 'arm64' } });
+    recovery.response.resolve(snapshot('24.9', { revision: 2, releases: [{ version: 'v24.9.0', date: null, lts: null }] }));
+    await searching;
+    expect(app.getSnapshot()).toMatchObject({ querying: false, selectedVersion: null, target: { os: 'linux', arch: 'arm64' }, error: null, catalog: { query: '24.9', revision: 2, preview: { status: 'unselected', selection: { version: null } } } });
+    const replacement = app.select('v24.9.0');
+    const current = await ipc.request(4);
+    current.response.resolve(snapshot('24.9', { revision: 2, releases: [{ version: 'v24.9.0', date: null, lts: null }], preview: { selection: current.selection, status: 'ready', source: null, required: [], error: null } }));
+    await replacement;
+    expect(app.getSnapshot().selectedVersion).toBe('v24.9.0');
+    app.disconnect();
+  });
+  /** 验证准备命令未送达后重连只读取idle，用户仍能主动准备，不自动获取清单。 */
+  it('准备IPC失败后重连到idle仍可主动准备', async () => {
+    const ipc = controlledIpc(false);
+    let rejected = true;
+    const app = createCatalogApplication({ ...ipc.adapter, preparePreview: async (selection, retry) => {
+      await ipc.adapter.preparePreview(selection, retry);
+      if (rejected) throw new Error('prepare未送达');
+    } });
+    const connecting = app.connect();
+    (await ipc.request(0)).response.resolve(snapshot());
+    await connecting;
+    await app.select('v24.10.0');
+    app.disconnect();
+    const reconnecting = app.connect();
+    const idle = await ipc.request(1);
+    idle.response.resolve(snapshot('', { preview: { selection: idle.selection, status: 'idle', source: null, required: [], error: null } }));
+    await reconnecting;
+    expect(ipc.preparations).toHaveLength(1);
+    expect(app.getSnapshot().previewError).toBeNull();
+    rejected = false;
+    const preparing = app.retryPreview();
+    const loading = await ipc.request(2);
+    loading.response.resolve(snapshot('', { revision: 2, preview: { selection: loading.selection, status: 'loading', source: null, required: [], error: null } }));
+    await preparing;
+    expect(ipc.preparations.at(-1)).toEqual({ selection: { version: 'v24.10.0', target: { os: 'macos', arch: 'x64' } }, retry: true });
+    expect(app.getSnapshot().catalog?.preview.status).toBe('loading');
+    app.disconnect();
+  });
   /** 清单准备传输失败属于发行版本，切目标仍应保留主动重试原因，不能停在无入口的 idle。 */
   it('切换目标不会清除同发行版本的准备IPC失败', async () => {
     const ipc = controlledIpc(false);
@@ -297,8 +452,8 @@ describe('前端目录应用公开 Interface', () => {
       if (failedCommand === 'retry') {
         const selected = await ipc.request(1);
         selected.response.resolve(snapshot('', { preview: {
-          selection: selected.selection, status: 'error', source: 'https://nodejs.org/dist/v24.10.0/SHASUMS256.txt',
-          required: [{ path: 'node-v24.10.0-darwin-x64.tar.xz', present: null, sha256: null }], error: '清单获取超时',
+          selection: selected.selection, status: 'idle', source: 'https://nodejs.org/dist/v24.10.0/SHASUMS256.txt',
+          required: [{ path: 'node-v24.10.0-darwin-x64.tar.xz', present: null, sha256: null }], error: null,
         } }));
         await selecting;
         await app.retryPreview();
@@ -346,8 +501,8 @@ describe('前端目录应用公开 Interface', () => {
     app.disconnect();
   });
 
-  /** 验证同发行版本prepare/retry因切目标改变查询序号后失败，仍保留原因供用户主动重试。 */
-  it('prepare或retry等待期间切目标不会吞掉同版本IPC错误', async () => {
+  /** 验证同发行版本prepare/retry切目标后仍idle时失败，必须保留无权威依据的IPC原因供用户主动重试。 */
+  it('prepare或retry等待期间切目标为idle不会吞掉同版本IPC错误', async () => {
     for (const command of ['prepare', 'retry']) {
       const ipc = controlledIpc(false);
       const preparation = deferred<void>();
@@ -363,7 +518,7 @@ describe('前端目录应用公开 Interface', () => {
       if (command === 'retry') {
         const failed = await ipc.request(requestIndex++);
         failed.response.resolve(snapshot('', { preview: {
-          selection: failed.selection, status: 'error', source: null, required: [], error: '清单获取超时',
+          selection: failed.selection, status: 'idle', source: null, required: [], error: null,
         } }));
         await pending;
         pending = app.retryPreview();
@@ -371,8 +526,7 @@ describe('前端目录应用公开 Interface', () => {
       const switching = app.setTarget({ os: 'linux', arch: 'arm64' });
       const current = await ipc.request(requestIndex);
       current.response.resolve(snapshot('', { preview: {
-        selection: current.selection, status: command === 'retry' ? 'error' : 'idle', source: null, required: [],
-        error: command === 'retry' ? '清单获取超时' : null,
+        selection: current.selection, status: 'idle', source: null, required: [], error: null,
       } }));
       await switching;
       preparation.reject(new Error(`${command} IPC中断`));
@@ -419,6 +573,7 @@ describe('前端目录应用公开 Interface', () => {
     await app.select('v24.10.0');
     const searching = app.setQuery('22');
     (await ipc.request(1)).response.reject(new Error('查询 IPC 失败'));
+    (await ipc.request(2)).response.reject(new Error('恢复读取同样失败'));
     await searching;
     await app.select('v24.9.0');
     expect(app.getSnapshot()).toMatchObject({ querying: false, query: '22', selectedVersion: 'v24.10.0', error: '查询 IPC 失败' });
@@ -578,6 +733,7 @@ describe('前端目录应用公开 Interface', () => {
     expect(app.getSnapshot().selectedVersion).toBe('v24.10.0');
     const transportFailure = app.setQuery('24');
     (await ipc.request(3)).response.reject(new Error('IPC 连接中断'));
+    (await ipc.request(4)).response.reject(new Error('恢复读取失败'));
     await transportFailure;
     expect(app.getSnapshot()).toMatchObject({ querying: false, selectedVersion: 'v24.10.0', error: 'IPC 连接中断' });
     app.disconnect();
