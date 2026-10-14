@@ -41,7 +41,7 @@ $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
     'ARM64' { 'arm64' }
     default { throw "不支持的 Windows 架构：$env:PROCESSOR_ARCHITECTURE" }
 }
-$archiveName = if ($architecture -eq 'arm64') { 'edgedriver_winarm64.zip' } else { 'edgedriver_win64.zip' }
+$archiveName = if ($architecture -eq 'arm64') { 'edgedriver_arm64.zip' } else { 'edgedriver_win64.zip' }
 $roots = @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA) |
     Where-Object { $_ } | Select-Object -Unique
 # Tauri 使用 WebView2：优先读取其真实运行时；仅在未安装时检查 Edge，避免拿 Edge 更新版本匹配旧 WebView2。
