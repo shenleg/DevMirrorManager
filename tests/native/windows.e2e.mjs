@@ -1,4 +1,4 @@
-/** 职责：通过 tauri-driver 和真实 Windows WebView2 验证官方目录、搜索、单选、失配清除与刷新，保留原生截图及结果。 */
+/** 职责：通过 tauri-driver 和真实 Windows WebView2 验证官方目录、六目标清单预览与草稿交互，保留原生截图及结果。 */
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
@@ -73,8 +73,25 @@ async function snapshot() {
   return execute(`return {
     query: document.querySelector('#release-query')?.value,
     source: document.querySelector('.source')?.textContent?.trim(),
-    status: document.querySelector('[role="status"]')?.textContent?.trim(),
-    alerts: Array.from(document.querySelectorAll('[role="alert"], .warning'), e => e.textContent),
+    status: document.querySelector('#catalog-status')?.textContent?.trim(),
+    alerts: Array.from(document.querySelectorAll('#catalog-panel [role="alert"], #catalog-panel .warning'), e => e.textContent),
+    preview: {
+      selection: {
+        version: document.querySelector('input[name="release"]:checked')?.value ?? null,
+        target: { os: document.querySelector('#target-os')?.value, arch: document.querySelector('#target-arch')?.value }
+      },
+      status: document.querySelector('#preview-panel')?.dataset.previewStatus,
+      source: document.querySelector('.manifest-source')?.textContent?.trim() || null,
+      required: Array.from(document.querySelectorAll('[data-artifact-path]'), row => ({
+        path: row.dataset.artifactPath,
+        present: row.dataset.present === 'unknown' ? null : row.dataset.present === 'present',
+        sha256: row.dataset.sha256 || null
+      })),
+      error: document.querySelector('#preview-panel [role="alert"]')?.textContent?.trim() || null
+    },
+    systems: Array.from(document.querySelectorAll('#target-os option'), option => ({ value: option.value, disabled: option.disabled })),
+    architectures: Array.from(document.querySelectorAll('#target-arch option'), option => ({ value: option.value, disabled: option.disabled })),
+    targetDisabled: Array.from(document.querySelectorAll('#target-os, #target-arch'), input => input.disabled),
     versions: Array.from(document.querySelectorAll('input[name="release"]'), e => e.value),
     disabled: Array.from(document.querySelectorAll('input[name="release"]'), e => e.matches(':disabled')),
     checked: Array.from(document.querySelectorAll('input[name="release"]:checked'), e => e.value),
@@ -115,6 +132,42 @@ async function select(version) {
   await request('POST', `/session/${sessionId}/element/${identifier}/click`, {});
   return poll(`选择 ${version}`, snapshot, state => ready(state)
     && state.checked.length === 1 && state.checked[0] === version && state.summary === '当前选择：' + version);
+}
+
+/** 通过真实 IPC 读取 query/selection 的权威快照；返回快照，命令或 WebDriver 错误抛出，不把 Promise 当同步结果。 */
+async function authoritativeSnapshot(query, selection) {
+  const response = await request('POST', `/session/${sessionId}/execute/async`, {
+    script: `const done = arguments[arguments.length - 1];
+      window.__TAURI_INTERNALS__.invoke('catalog_snapshot', { query: arguments[0], selection: arguments[1] })
+        .then(snapshot => done({ snapshot }), error => done({ error: String(error) }));`,
+    args: [query, selection],
+  });
+  assert.equal(response.error, undefined, `真实快照命令失败：${response.error}`);
+  return response.snapshot;
+}
+
+/** 使用真实 WebDriver 选择 os/arch 控件；返回完成承诺，控件不可操作或驱动失败抛出。 */
+async function target(os, arch) {
+  for (const [id, value] of [['target-os', os], ['target-arch', arch]]) {
+    const option = await element(`#${id} option[value="${value}"]`);
+    await request('POST', `/session/${sessionId}/element/${option}/click`, {});
+  }
+}
+
+/** 等待 version/os/arch 的官方清单预览并核对 DOM；返回真实页面状态，清单失败、事实不一致或超时抛出。 */
+async function preview(version, os, arch) {
+  const observed = await poll(`清单预览 ${os}/${arch}`, snapshot, state => {
+    assert.notEqual(state.preview.status, 'error', `清单失败不能冒充缺文件：${state.preview.error}`);
+    return ready(state) && ['ready', 'missing'].includes(state.preview.status)
+      && state.preview.selection.version === version
+      && state.preview.selection.target.os === os && state.preview.selection.target.arch === arch;
+  });
+  const authoritative = await authoritativeSnapshot(observed.query, observed.preview.selection);
+  assert.deepEqual(observed.preview, authoritative.preview, '真实 DOM 必须完整对应 Rust 清单判定');
+  assert.equal(observed.preview.source, `https://nodejs.org/dist/${version}/SHASUMS256.txt`);
+  assert(observed.preview.required.every(file => typeof file.present === 'boolean'), '成功清单不能仍标为未知');
+  assert(observed.preview.required.every(file => !file.present || /^[a-f0-9]{64}$/i.test(file.sha256)), '存在条目须保留清单 hash');
+  return observed;
 }
 
 /** 保存 name 对应的真实 WebView 截图；返回写入承诺，截图缺失或文件失败时抛出。 */
@@ -197,11 +250,39 @@ try {
   result.checks.push({ name: 'raw-prefix-and-single-selection', query: filtered.query, count: filtered.versions.length, selected: [first, second] });
   await screenshot('02-search-selection');
 
+  // 官方清单的实际缺项也是正确结果；不能要求所有历史发行版本具备全部六目标。
+  assert.deepEqual(initial.systems, ['macos', 'windows', 'linux'].map(value => ({ value, disabled: false })));
+  assert.deepEqual(initial.architectures, ['x64', 'arm64'].map(value => ({ value, disabled: false })));
+  assert.deepEqual(initial.targetDisabled, [false, false], '目标控件不得受宿主或未选发行版本限制');
+  for (const [os, arch] of [['macos', 'x64'], ['macos', 'arm64'], ['windows', 'x64'], ['windows', 'arm64'], ['linux', 'x64'], ['linux', 'arm64']]) {
+    await target(os, arch);
+    const observed = await preview(second, os, arch);
+    assert.deepEqual(observed.checked, [second], '改选目标不能静默更换发行版本');
+    result.checks.push({ name: 'official-target-preview', ...observed.preview });
+    await screenshot(`target-${os}-${arch}`);
+  }
+
+  const rejected = await request('POST', `/session/${sessionId}/execute/async`, {
+    script: `const done = arguments[arguments.length - 1], version = arguments[0];
+      Promise.all([
+        { version: '../node', target: { os: 'windows', arch: 'x64' } },
+        { version, target: { os: 'linux', arch: 'mips' } },
+        { version, target: { os: 'windows', arch: 'x64' }, format: 'zip' }
+      ].map(selection => window.__TAURI_INTERNALS__.invoke('prepare_preview', { selection, retry: false })
+        .then(() => ({ rejected: false }), error => ({ rejected: true, reason: String(error) })))).then(done);`,
+    args: [second],
+  });
+  assert.equal(rejected.length, 3);
+  assert(rejected.every(input => input.rejected && input.reason), '真实 IPC 必须拒绝恶意版本、非法架构和任意格式');
+  result.checks.push({ name: 'malicious-ipc-selections-rejected', inputs: rejected });
+
   await search('24.10');
   const cleared = await poll('失配清除且不自动改选', snapshot, state => ready(state) && state.query === '24.10'
     && state.versions.every(version => version.startsWith('v24.10.')) && state.checked.length === 0
     && state.summary === '尚未选择发行版本' && state.feedback.includes('已清除单选'));
-  result.checks.push({ name: 'mismatch-clears-no-auto-select', count: cleared.versions.length });
+  assert.deepEqual(cleared.preview.selection, { version: null, target: { os: 'linux', arch: 'arm64' } }, '失配只清发行版本，保留系统与架构');
+  assert.equal(cleared.preview.status, 'unselected', '旧清单不能让未选草稿继续显示就绪');
+  result.checks.push({ name: 'mismatch-clears-no-auto-select', count: cleared.versions.length, selection: cleared.preview.selection });
   await screenshot('03-cleared');
 
   // checkedAt 以秒显示：跨过显示精度后刷新，不能把同秒文本不变误判为未刷新。

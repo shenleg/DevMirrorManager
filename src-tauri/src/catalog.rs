@@ -10,6 +10,17 @@ pub struct Release {
     pub lts: Option<serde_json::Value>,
 }
 
+/// 校验正式发行标识；version 为候选文本，返回语义版本，缺少 v 或非规范正式版本时返回原因。
+pub(crate) fn validate_version(version: &str) -> Result<Version, String> {
+    let parsed = Version::parse(version.strip_prefix('v').ok_or("发行版本缺少 v 前导标记")?)
+        .map_err(|e| format!("无效的发行版本 {version}：{e}"))?;
+    // 正式发行标识只接受规范的 vX.Y.Z，避免可选后缀被误当作正式发行路径。
+    if !parsed.pre.is_empty() || !parsed.build.is_empty() || version != format!("v{parsed}") {
+        return Err(format!("不是完整正式发行版本：{version}"));
+    }
+    Ok(parsed)
+}
+
 /// 校验官方目录；body 为原始JSON字节，返回降序发行版本和可选元数据告警，必需元数据非法返回原因。
 pub(crate) fn parse(body: &[u8]) -> Result<(Vec<Release>, Vec<String>), String> {
     let rows: Vec<serde_json::Value> =
@@ -22,12 +33,7 @@ pub(crate) fn parse(body: &[u8]) -> Result<(Vec<Release>, Vec<String>), String> 
             .get("version")
             .and_then(|v| v.as_str())
             .ok_or("官方版本目录缺少发行版本标识")?;
-        let parsed = Version::parse(version.strip_prefix('v').ok_or("发行版本缺少 v 前导标记")?)
-            .map_err(|e| format!("无效的发行版本 {version}：{e}"))?;
-        // 正式发行标识只接受规范的 vX.Y.Z，避免可选后缀被误当作正式发行路径。
-        if !parsed.pre.is_empty() || !parsed.build.is_empty() || version != format!("v{parsed}") {
-            return Err(format!("不是完整正式发行版本：{version}"));
-        }
+        let parsed = validate_version(version)?;
         if !versions.insert(version.to_owned()) {
             return Err(format!("官方目录含重复发行版本：{version}"));
         }

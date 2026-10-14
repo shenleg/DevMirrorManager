@@ -59,6 +59,11 @@ try {
   if (!readiness) throw new Error('未收到真实 WebView 就绪报告；进程存活不能证明桌面可用');
   if (readiness.status !== 'passed') throw new Error(`WebView 冒烟失败：${readiness.reason ?? '无说明'}`);
   if (readiness.arch !== process.arch.replace('x64', 'x86_64').replace('arm64', 'aarch64')) throw new Error('就绪报告架构与宿主不匹配');
+  // 票15要求真实 IPC 清单预览；旧目录冒烟的 passed 不能冒充目标验证完成。
+  const expectedTargets = ['macos/x64', 'macos/arm64', 'windows/x64', 'windows/arm64', 'linux/x64', 'linux/arm64'];
+  const observedTargets = readiness.previews?.map(preview => `${preview.selection.target.os}/${preview.selection.target.arch}`);
+  if (JSON.stringify(observedTargets) !== JSON.stringify(expectedTargets)
+      || !readiness.targetPreserved || !readiness.versionPreserved) throw new Error('原生报告未验证六目标、目标保留与发行版本保留');
   const screenshot = resolve(output, 'native-window.png');
   if (process.platform === 'darwin') {
     await capture(macCapture, [String(child.pid), screenshot]);

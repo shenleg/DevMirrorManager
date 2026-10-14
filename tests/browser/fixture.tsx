@@ -9,12 +9,20 @@ import '../../src/styles.css';
 const adapter: CatalogAdapter = {
   /** 打开受控目录边界；无参数，返回已完成承诺，不访问官方网络或抛出异常。 */
   async open() {},
-  /** 读取外部测试快照；query 原样传给响应边界，返回权威样本，网络、HTTP 或 JSON 失败时拒绝。 */
-  async snapshot(query): Promise<CatalogSnapshot> {
-    const response = await fetch(`/tests/browser/ipc/snapshot?query=${encodeURIComponent(query)}`);
+  /** 读取外部测试快照；query 和 selection 原样传给边界，返回权威样本，网络、HTTP 或 JSON 失败时拒绝。 */
+  async snapshot(query, selection): Promise<CatalogSnapshot> {
+    const params = new URLSearchParams({ query, selection: JSON.stringify(selection) });
+    const response = await fetch(`/tests/browser/ipc/snapshot?${params}`);
     // fetch 的非 2xx 不自动拒绝；需将传输失败交给 App 的正式错误恢复路径，而非当成目录样本。
     if (!response.ok) throw new Error(`测试目录 IPC 读取失败：HTTP ${response.status}`);
     return response.json();
+  },
+  /** 将 selection 和主动 retry 原样传给外部路由；返回完成承诺，网络或 HTTP 失败时拒绝。 */
+  async preparePreview(selection, retry) {
+    const response = await fetch('/tests/browser/ipc/prepare', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selection, retry }),
+    });
+    if (!response.ok) throw new Error(`测试清单 IPC 准备失败：HTTP ${response.status}`);
   },
   /** 确认手动刷新入口；无参数，返回已完成承诺，后续快照由测试响应控制，不抛出异常。 */
   async refresh() {},

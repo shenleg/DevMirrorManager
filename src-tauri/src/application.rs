@@ -1,11 +1,12 @@
-//! 官方目录的应用命令、权威快照与通知；网络等待不持有查询状态锁。
+//! 官方目录与清单的应用命令、权威快照和统一通知；网络及清单解析不持有查询状态锁。
 use crate::{
     cache::{self, CachedCatalog},
     catalog::{self, Release},
-    official_source::{CatalogResponse, CatalogSource},
+    manifest::{self, ManifestState, Preview, ReleaseVersion, Selection},
+    official_source::{CatalogResponse, CatalogSource, ManifestSource},
 };
 use serde::Serialize;
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::{watch, Mutex};
 
 /// 界面恢复展示所需的权威快照，query 保留原始输入，checkedAt 使用 Unix 毫秒。
@@ -23,6 +24,7 @@ pub struct CatalogSnapshot {
     pub error: Option<String>,
     pub warnings: Vec<String>,
     pub source: &'static str,
+    pub preview: Preview,
 }
 
 struct State {
@@ -35,11 +37,13 @@ struct State {
     opened: bool,
     loading: bool,
     cache_protection: Option<String>,
+    manifests: HashMap<String, ManifestState>,
 }
 
-/// 集中持有目录事实；前端草稿不属于权威目录，查询没有全局查询副作用。
+/// 集中持有目录与清单事实；前端草稿不属于权威状态，查询没有全局选择副作用。
 pub struct Application {
     source: Arc<dyn CatalogSource>,
+    manifest_source: Option<Arc<dyn ManifestSource>>,
     cache_dir: PathBuf,
     now: Arc<dyn Fn() -> u64 + Send + Sync>,
     state: Mutex<State>,
@@ -47,14 +51,34 @@ pub struct Application {
 }
 
 impl Application {
-    /// 创建应用；source 为官方 Adapter，cache_dir 为专用缓存位置，now 返回 Unix 毫秒；返回空应用，不访问网络、不抛异常。
+    /// 创建仅目录应用；source 为官方目录 Adapter，cache_dir 为专用缓存位置，now 返回 Unix 毫秒；返回空应用，不联网、不抛异常，清单命令会报告未配置来源。
     pub fn new(
         source: Arc<dyn CatalogSource>,
         cache_dir: PathBuf,
         now: Arc<dyn Fn() -> u64 + Send + Sync>,
     ) -> Self {
+        Self::build(source, None, cache_dir, now)
+    }
+
+    /// 创建完整预览应用；source/manifest_source 为外部目录/清单来源，cache_dir 仅缓存目录，now 返回 Unix 毫秒；返回空应用，不联网、不抛异常。
+    pub fn new_with_manifest_source(
+        source: Arc<dyn CatalogSource>,
+        manifest_source: Arc<dyn ManifestSource>,
+        cache_dir: PathBuf,
+        now: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
+        Self::build(source, Some(manifest_source), cache_dir, now)
+    }
+
+    fn build(
+        source: Arc<dyn CatalogSource>,
+        manifest_source: Option<Arc<dyn ManifestSource>>,
+        cache_dir: PathBuf,
+        now: Arc<dyn Fn() -> u64 + Send + Sync>,
+    ) -> Self {
         Self {
             source,
+            manifest_source,
             cache_dir,
             now,
             state: Mutex::new(State {
@@ -67,12 +91,13 @@ impl Application {
                 opened: false,
                 loading: false,
                 cache_protection: None,
+                manifests: HashMap::new(),
             }),
             notifications: watch::channel(0).0,
         }
     }
 
-    /// 订阅目录 revision；无参数，返回轻量通知接收端，不抛异常。通知可以合并，调用者必须通过快照取得事实。
+    /// 订阅目录与清单共用的 revision；无参数，返回轻量通知接收端，不抛异常。通知可以合并，调用者必须通过快照取得事实。
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.notifications.subscribe()
     }
@@ -196,7 +221,45 @@ impl Application {
 
     /// 查询权威快照；query 为原始搜索输入，返回独立的语义版本降序候选，不修改目录、不抛异常。
     pub async fn snapshot(&self, query: &str) -> CatalogSnapshot {
+        // 空选择不会校验失败；旧目录入口与目标预览共用同一权威快照。
+        self.snapshot_with_selection(query, Selection::default())
+            .await
+            .expect("默认空选择始终有效")
+    }
+
+    fn validate_selection(
+        state: &State,
+        selection: &Selection,
+    ) -> Result<Option<ReleaseVersion>, String> {
+        let Some(version) = &selection.version else {
+            return Ok(None);
+        };
+        let validated = ReleaseVersion::validated(version)?;
+        if !state
+            .releases
+            .as_ref()
+            .is_some_and(|releases| releases.iter().any(|release| release.version == *version))
+        {
+            return Err("所选发行版本不属于已校验官方目录".into());
+        }
+        Ok(Some(validated))
+    }
+
+    /// 查询包含目标预览的完整快照；query 为原始搜索，selection 为草稿；返回同一 revision 下的目录与预览，非法或目录外版本返回原因，不联网。
+    pub async fn snapshot_with_selection(
+        &self,
+        query: &str,
+        selection: Selection,
+    ) -> Result<CatalogSnapshot, String> {
         let state = self.state.lock().await;
+        Self::validate_selection(&state, &selection)?;
+        let preview = manifest::preview(
+            selection.clone(),
+            selection
+                .version
+                .as_ref()
+                .and_then(|version| state.manifests.get(version)),
+        );
         let mut warnings = state.warnings.clone();
         if let Some(warning) = &state.cache_protection {
             warnings.push(warning.clone());
@@ -217,7 +280,7 @@ impl Application {
         let expired = state.checked_at.is_some_and(|time| {
             time > (self.now)() || (self.now)().saturating_sub(time) >= cache::MAX_AGE_MS
         });
-        CatalogSnapshot {
+        Ok(CatalogSnapshot {
             revision: state.revision,
             query: query.into(),
             normalized_query: normalized.into(),
@@ -238,6 +301,56 @@ impl Application {
             error: state.error.clone(),
             warnings,
             source: "https://nodejs.org/dist/index.json",
+            preview,
+        })
+    }
+
+    /// 准备清单；selection 为草稿，retry 仅表示用户主动重试失败；返回前完成输入校验与调度，非法/未选版本或未配置来源返回原因，联网/解析错误由快照报告。
+    pub async fn prepare_preview(
+        self: &Arc<Self>,
+        selection: Selection,
+        retry: bool,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock().await;
+        let version = Self::validate_selection(&state, &selection)?.ok_or("请先选择发行版本")?;
+        let source = self.manifest_source.clone().ok_or("未配置官方清单来源")?;
+        match state.manifests.get(version.as_str()) {
+            Some(ManifestState::Loading | ManifestState::Ready(_)) => return Ok(()),
+            Some(ManifestState::Error(_)) if !retry => return Ok(()),
+            _ => {}
         }
+        state
+            .manifests
+            .insert(version.as_str().into(), ManifestState::Loading);
+        self.publish(&mut state);
+        let application = self.clone();
+        tokio::spawn(async move {
+            // 外部等待与解析都在锁外，查询其他发行版本不会被网络阻塞。
+            let result = source.fetch(&version).await.and_then(manifest::parse);
+            let mut state = application.state.lock().await;
+            state.manifests.insert(
+                version.as_str().into(),
+                match result {
+                    Ok(manifest) => ManifestState::Ready(manifest),
+                    Err(reason) => ManifestState::Error(format!("官方清单准备失败：{reason}")),
+                },
+            );
+            application.publish(&mut state);
+        });
+        Ok(())
+    }
+
+    /// 读取已成功解析清单的原始字节；version 必须规范且属于目录，返回共享只读字节或尚未成功的 None；非法/目录外版本返回原因，不联网。
+    pub async fn raw_manifest(&self, version: &str) -> Result<Option<Arc<[u8]>>, String> {
+        let state = self.state.lock().await;
+        let selection = Selection {
+            version: Some(version.into()),
+            ..Selection::default()
+        };
+        Self::validate_selection(&state, &selection)?;
+        Ok(match state.manifests.get(version) {
+            Some(ManifestState::Ready(manifest)) => Some(manifest.raw.clone()),
+            _ => None,
+        })
     }
 }

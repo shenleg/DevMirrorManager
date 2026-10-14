@@ -8,6 +8,14 @@ test('生产根入口在浏览器明确拒绝桌面 IPC', async ({ page }) => {
   await expect(error).toHaveText('请在 Tauri 桌面应用中打开；浏览器预览无法访问官方目录。');
   await page.getByRole('searchbox', { name: '搜索发行版本' }).fill('V22.1');
   await expect(error).toHaveText('请在 Tauri 桌面应用中打开；浏览器预览无法访问官方目录。');
+  await page.locator('#target-os').selectOption('linux');
+  await page.locator('#target-arch').selectOption('arm64');
+  await expect(page.locator('#target-os')).toHaveValue('linux');
+  await expect(page.locator('#target-arch')).toHaveValue('arm64');
+  await expect(page.locator('#target-os option')).toHaveCount(3);
+  await expect(page.locator('#target-arch option')).toHaveCount(2);
+  await expect(page.locator('#preview-panel')).toHaveAttribute('data-preview-status', 'unselected');
+  await expect(page.locator('[data-artifact-path]')).toHaveCount(0);
   await page.getByRole('button', { name: '刷新目录' }).click();
   await expect(error).toHaveText('请在 Tauri 桌面应用中打开；浏览器预览无法访问官方目录。');
   await expect(page.getByRole('radio')).toHaveCount(0);

@@ -1,9 +1,9 @@
 /** 职责：通过真实 React 用户操作验证目录状态与单选反馈，只替换外部 IPC Adapter。 */
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
 import { App } from './App';
-import type { CatalogAdapter, CatalogSnapshot } from './catalog';
+import type { CatalogAdapter, CatalogSnapshot, Selection } from './catalog';
 
 afterEach(cleanup);
 
@@ -16,24 +16,46 @@ function snapshot(query = '', overrides: Partial<CatalogSnapshot> = {}): Catalog
       { version: 'v24.9.0', date: null, lts: null },
     ],
     checkedAt: 1_760_000_000_000, stale: false, error: null, warnings: [],
-    source: 'https://nodejs.org/dist/index.json', ...overrides,
+    source: 'https://nodejs.org/dist/index.json',
+    preview: { selection: { version: null, target: { os: 'macos', arch: 'x64' } }, status: 'unselected', source: null, required: [], error: null },
+    ...overrides,
   };
 }
 
-/** 创建外部 IPC 控制器；返回待完成请求与通知入口，不模拟应用内部，不抛出异常。 */
-function controlledIpc() {
-  const requests: { query: string; resolve: (value: CatalogSnapshot) => void; reject: (reason: unknown) => void }[] = [];
+/** 创建外部 IPC 控制器；autoPreparation 自动完成旧目录用例的空预览，返回请求与通知入口，不抛出异常。 */
+function controlledIpc(autoPreparation = true) {
+  const requests: { query: string; selection: Selection; resolve: (value: CatalogSnapshot) => void; reject: (reason: unknown) => void }[] = [];
+  const preparations: { selection: Selection; retry: boolean }[] = [];
+  let latest = snapshot();
+  let preparationRead = false;
   const listeners = new Set<(revision: number) => void>();
   const adapter: CatalogAdapter = {
     open: async () => {}, refresh: async () => {},
-    snapshot: (query) => new Promise((resolve, reject) => { requests.push({ query, resolve, reject }); }),
+    snapshot: (query, selection) => {
+      if (autoPreparation && selection.version === null && latest.preview.selection.version !== null && latest.query === query) {
+        latest = { ...latest, preview: { selection, status: 'unselected', source: null, required: [], error: null } };
+        return Promise.resolve(latest);
+      }
+      if (autoPreparation && preparationRead) {
+        preparationRead = false;
+        return Promise.resolve({ ...latest, query, preview: { selection, status: 'idle', source: null, required: [], error: null } });
+      }
+      return new Promise((resolve, reject) => { requests.push({ query, selection, resolve: (value) => {
+        latest = { ...value, preview: { ...value.preview, selection } };
+        resolve(latest);
+      }, reject }); });
+    },
+    preparePreview: async (selection, retry) => {
+      preparations.push({ selection, retry });
+      preparationRead = autoPreparation;
+    },
     listen: async (listener) => {
       listeners.add(listener);
       return () => { listeners.delete(listener); };
     },
   };
   return {
-    adapter,
+    adapter, requests, preparations,
     /** 完成第 index 个 IPC 请求；value 是权威快照，返回完成承诺，不存在时测试超时报错。 */
     respond: async (index: number, value: CatalogSnapshot) => {
       await waitFor(() => expect(requests[index]).toBeDefined());
@@ -50,7 +72,79 @@ function controlledIpc() {
 }
 
 describe('正式目录界面用户操作', () => {
+  /** 验证正式页面始终提供原生独立目标控件，并逐项渲染外部权威事实和清单来源。 */
+  it('Windows预览显示权威7z和hash而没有下载入口', async () => {
+    const ipc = controlledIpc(false);
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.selectOptions(screen.getByRole('combobox', { name: '目标系统' }), 'windows');
+    await ipc.respond(1, snapshot());
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    await ipc.respond(2, snapshot('', { revision: 2, preview: {
+      selection: { version: 'v24.10.0', target: { os: 'windows', arch: 'x64' } },
+      status: 'ready', source: 'https://nodejs.org/dist/v24.10.0/SHASUMS256.txt',
+      required: [{ path: 'node-v24.10.0-win-x64.7z', present: true, sha256: 'a'.repeat(64) }], error: null,
+    } }));
+    const panel = screen.getByRole('region', { name: '目标平台与必需文件预览' });
+    expect(panel.getAttribute('data-preview-status')).toBe('ready');
+    const row = panel.querySelector('[data-artifact-path="node-v24.10.0-win-x64.7z"]');
+    expect(row?.getAttribute('data-present')).toBe('present');
+    expect(row?.getAttribute('data-sha256')).toBe('a'.repeat(64));
+    expect(panel.textContent).toContain('清单证实存在');
+    expect(panel.querySelector('.manifest-source')?.textContent).toBe('https://nodejs.org/dist/v24.10.0/SHASUMS256.txt');
+    expect(screen.queryByRole('button', { name: /下载/ })).toBeNull();
+    expect(screen.getByText('仅预览，下载尚未接入。')).toBeDefined();
+  });
+  /** 验证目标切换等待期间不把上一个目标的ready文件显示为当前目标事实。 */
+  it('新目标响应前隐藏旧目标文件和ready状态', async () => {
+    const ipc = controlledIpc(false);
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    await ipc.respond(1, snapshot('', { preview: {
+      selection: ipc.requests[1]!.selection, status: 'ready', source: 'https://nodejs.org/dist/v24.10.0/SHASUMS256.txt',
+      required: [{ path: 'old-target.tar.xz', present: true, sha256: 'b'.repeat(64) }], error: null,
+    } }));
+    await user.selectOptions(screen.getByRole('combobox', { name: '目标系统' }), 'linux');
+    const panel = screen.getByRole('region', { name: '目标平台与必需文件预览' });
+    expect(panel.querySelector('[data-artifact-path]')).toBeNull();
+    expect(panel.getAttribute('data-preview-status')).not.toBe('ready');
+    expect(panel.querySelector('.manifest-source')?.textContent).toBe('');
+    expect(screen.getByText('当前选择：v24.10.0')).toBeDefined();
+    await ipc.respond(2, snapshot('', { preview: { selection: ipc.requests[2]!.selection, status: 'idle', source: null, required: [], error: null } }));
+    expect(panel.getAttribute('data-preview-status')).toBe('idle');
+  });
+
+  /** 验证清单失败只影响预览区，重试命令失败不伪报目录错误或目标不支持。 */
+  it('清单错误与重试IPC失败只在预览区域展示原因', async () => {
+    const ipc = controlledIpc(false);
+    render(<App adapter={{ ...ipc.adapter, preparePreview: async (selection, retry) => {
+      if (retry) throw new Error('清单重试IPC中断');
+      await ipc.adapter.preparePreview(selection, retry);
+    } }} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    await ipc.respond(1, snapshot('', { preview: {
+      selection: ipc.requests[1]!.selection, status: 'error', source: 'https://nodejs.org/dist/v24.10.0/SHASUMS256.txt',
+      required: [{ path: 'node-v24.10.0-darwin-x64.tar.xz', present: null, sha256: null }], error: '清单获取超时',
+    } }));
+    const catalogPanel = within(screen.getByRole('region', { name: '搜索并选择发行版本' }));
+    const previewPanel = within(screen.getByRole('region', { name: '目标平台与必需文件预览' }));
+    expect(previewPanel.getByRole('alert').textContent).toBe('清单获取超时');
+    expect(previewPanel.getByText('存在性待确认')).toBeDefined();
+    await user.click(previewPanel.getByRole('button', { name: '重试清单' }));
+    expect(previewPanel.getByRole('alert').textContent).toBe('清单重试IPC中断');
+    expect(catalogPanel.queryByRole('alert')).toBeNull();
+    expect(catalogPanel.getByRole('status').textContent).toContain('目录就绪');
+    expect(screen.queryByText(/目标不支持/)).toBeNull();
+    expect(screen.getByRole('combobox', { name: '目标系统' }).hasAttribute('disabled')).toBe(false);
+  });
+
   // 刷新命令确认只表示启动；完成后不可继续误述为等待响应，应以权威状态和校验时间为准。
+  /** 验证刷新完成后的操作说明不再声称仍在等待。 */
   it('刷新完成后的操作说明不再声称仍在等待', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -58,12 +152,13 @@ describe('正式目录界面用户操作', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '刷新目录' }));
     await ipc.respond(1, snapshot('', { revision: 2 }));
-    expect(screen.getByRole('status').textContent).toContain('目录就绪');
+    expect(within(screen.getByRole('region', { name: '搜索并选择发行版本' })).getByRole('status').textContent).toContain('目录就绪');
     expect(screen.getByText('已发起手动刷新；结果以目录状态与成功校验时间为准。')).toBeDefined();
     expect(screen.queryByText(/等待权威结果/)).toBeNull();
   });
 
   // 旧快照仍为loading时新的IPC失败不能永久锁住刷新按钮，用户必须能主动恢复。
+  /** 验证刷新进度的IPC读取失败后仍可主动重试。 */
   it('刷新进度的IPC读取失败后仍可主动重试', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -74,10 +169,11 @@ describe('正式目录界面用户操作', () => {
     await user.click(screen.getByRole('button', { name: '刷新目录' }));
     await ipc.respond(2, snapshot('', { revision: 2 }));
     expect(screen.queryByRole('alert')).toBeNull();
-    expect(screen.getByRole('status').textContent).toContain('目录就绪');
+    expect(within(screen.getByRole('region', { name: '搜索并选择发行版本' })).getByRole('status').textContent).toContain('目录就绪');
   });
 
   // 官方 false 表示已知无历史 LTS 标记，与缺失/损坏信息的未知不同，均不推断当前支持。
+  /** 验证区分无LTS标记和未知标记。 */
   it('区分无LTS标记和未知标记', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -91,6 +187,7 @@ describe('正式目录界面用户操作', () => {
   });
 
   // IPC 查询失败不能把上一查询的空列表当成当前空结果，也必须保留主动重试入口。
+  /** 验证旧查询为空而新查询IPC失败时不伪报无匹配。 */
   it('旧查询为空而新查询IPC失败时不伪报无匹配', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -108,6 +205,7 @@ describe('正式目录界面用户操作', () => {
   });
 
   // 浏览器不具备真实 IPC，输入不能掩盖桌面环境要求，更不能退回内置假目录。
+  /** 验证浏览器预览明确报错且输入后仍不提供假候选。 */
   it('浏览器预览明确报错且输入后仍不提供假候选', async () => {
     render(<App />);
     expect((await screen.findByRole('alert')).textContent).toContain('Tauri 桌面应用');
@@ -119,6 +217,7 @@ describe('正式目录界面用户操作', () => {
   });
 
   // 旧目录仍可用，但刷新失败、缓存告警和元数据未知都不能藏在“就绪”里。
+  /** 验证刷新失败保留单选并明确展示旧数据和缓存告警。 */
   it('刷新失败保留单选并明确展示旧数据和缓存告警', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -139,6 +238,7 @@ describe('正式目录界面用户操作', () => {
   });
 
   // 搜索待定时旧候选禁选，只有权威空结果才能清草稿，回到原查询不会自动恢复。
+  /** 验证搜索无匹配时清除草稿并给出空结果与提示。 */
   it('搜索无匹配时清除草稿并给出空结果与提示', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
@@ -160,11 +260,12 @@ describe('正式目录界面用户操作', () => {
   });
 
   // 验证目录获取是异步状态：失败必须显示原因与主动刷新，不能标成空结果。
+  /** 验证首次加载失败后可以主动刷新并恢复目录。 */
   it('首次加载失败后可以主动刷新并恢复目录', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
     await ipc.respond(0, snapshot('', { revision: 0, status: 'loading', hasCatalog: false, releases: [], checkedAt: null }));
-    expect(screen.getByRole('status').textContent).toContain('加载');
+    expect(within(screen.getByRole('region', { name: '搜索并选择发行版本' })).getByRole('status').textContent).toContain('加载');
     ipc.notify(1);
     await ipc.respond(1, snapshot('', { status: 'error', hasCatalog: false, releases: [], checkedAt: null, error: '官方目录解析失败：重复发行版本' }));
     expect(screen.getByRole('alert').textContent).toContain('重复发行版本');
@@ -172,7 +273,7 @@ describe('正式目录界面用户操作', () => {
     const user = userEvent.setup();
     await user.click(screen.getByRole('button', { name: '刷新目录' }));
     await ipc.respond(2, snapshot('', { revision: 2, status: 'loading', hasCatalog: false, releases: [], checkedAt: null }));
-    expect(screen.getByRole('status').textContent).toContain('加载');
+    expect(within(screen.getByRole('region', { name: '搜索并选择发行版本' })).getByRole('status').textContent).toContain('加载');
     ipc.notify(3);
     await ipc.respond(3, snapshot('', { revision: 3 }));
     expect(await screen.findByRole('radio', { name: 'v24.10.0' })).toBeDefined();
@@ -180,10 +281,11 @@ describe('正式目录界面用户操作', () => {
   });
 
   // 验证初始加载不会冒充空结果，并呈现权威版本、来源及单选草稿。
+  /** 验证加载后能从原生radio单选发行版本。 */
   it('加载后能从原生radio单选发行版本', async () => {
     const ipc = controlledIpc();
     render(<App adapter={ipc.adapter} />);
-    expect(screen.getByRole('status').textContent).toContain('加载');
+    expect(within(screen.getByRole('region', { name: '搜索并选择发行版本' })).getByRole('status').textContent).toContain('加载');
     expect(screen.queryByText('没有匹配的发行版本')).toBeNull();
     await ipc.respond(0, snapshot());
     const user = userEvent.setup();
