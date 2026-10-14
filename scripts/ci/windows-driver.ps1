@@ -7,7 +7,7 @@
 .OUTPUTS
 输出包含 driver_path、browser_path、browser_version、architecture 的 JSON，并写入 GITHUB_OUTPUT（如存在）。
 .NOTES
-浏览器缺失、架构不支持、下载失败或驱动版本不匹配都会终止，不回退到其他版本。
+浏览器缺失、架构不支持或构建系列不匹配会终止；精确补丁归档缺失时仅接受微软提供的同构建系列补丁。
 #>
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string]$OutputDirectory)
@@ -69,15 +69,43 @@ $expandedDirectory = Join-Path $OutputDirectory ("expanded-" + [guid]::NewGuid()
 $null = New-Item -ItemType Directory -Path $downloadDirectory
 $null = New-Item -ItemType Directory -Path $expandedDirectory
 $archivePath = Join-Path $downloadDirectory $archiveName
-Invoke-WebRequest -Uri $url -OutFile $archivePath -TimeoutSec 120 -MaximumRedirection 0
+Write-Output "Detected runtime $version ($architecture), requesting $url"
+try {
+    Invoke-WebRequest -Uri $url -OutFile $archivePath -TimeoutSec 120 -MaximumRedirection 0
+} catch {
+    if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+    # 微软要求前3段一致，不保证每个WebView2补丁都有驱动归档；不跨构建系列猜版本。
+    # 官方版本文件可能是UTF-16，WebResponse会按内容解码；保留失败URL与回退依据。
+    $releaseUrl = "https://msedgedriver.microsoft.com/LATEST_RELEASE_$($browser.Version.Major)_WINDOWS"
+    $versionFile = Join-Path $downloadDirectory 'official-driver-version.txt'
+    Invoke-WebRequest -Uri $releaseUrl -OutFile $versionFile -TimeoutSec 60 -MaximumRedirection 0
+    $versionBytes = [IO.File]::ReadAllBytes($versionFile)
+    $encoding = if ($versionBytes.Length -ge 2 -and $versionBytes[0] -eq 255 -and $versionBytes[1] -eq 254) { [Text.Encoding]::Unicode } else { [Text.Encoding]::UTF8 }
+    $releaseText = ($encoding.GetString($versionBytes) -replace '^﻿', '').Trim()
+    if ($releaseText -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw "微软驱动版本响应无法识别：$releaseText" }
+    $candidate = [version]$releaseText
+    if ($candidate.Major -ne $browser.Version.Major -or $candidate.Minor -ne $browser.Version.Minor -or $candidate.Build -ne $browser.Version.Build) {
+        throw "微软提供的驱动 $candidate 与运行时 $version 不在相同构建系列"
+    }
+    $url = "https://msedgedriver.microsoft.com/$releaseText/$archiveName"
+    Write-Output "Exact patch archive missing; using officially compatible build: $url"
+    # 第二次下载仍放入新目录，不覆写失败请求留下的文件。
+    $fallbackDirectory = Join-Path $OutputDirectory ("download-compatible-" + [guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $fallbackDirectory
+    $archivePath = Join-Path $fallbackDirectory $archiveName
+    Invoke-WebRequest -Uri $url -OutFile $archivePath -TimeoutSec 120 -MaximumRedirection 0
+}
 Expand-Archive -LiteralPath $archivePath -DestinationPath $expandedDirectory
 $driverPath = Join-Path $expandedDirectory 'msedgedriver.exe'
 if (-not (Test-Path -LiteralPath $driverPath -PathType Leaf)) { throw '官方压缩包没有 msedgedriver.exe。' }
 $driverVersion = (& $driverPath --version 2>&1 | Out-String).Trim()
-if ($LASTEXITCODE -ne 0 -or $driverVersion -notmatch '^MSEdgeDriver (\d+\.\d+\.\d+\.\d+)(?:\s|$)') {
+if ($LASTEXITCODE -ne 0 -or $driverVersion -notmatch '^(?:MSEdgeDriver|Microsoft Edge WebDriver) (\d+\.\d+\.\d+\.\d+)(?:\s|$)') {
     throw "无法验证 Edge Driver 版本：$driverVersion"
 }
-if ($Matches[1] -ne $version) { throw "浏览器版本 $version 与驱动版本 $($Matches[1]) 不匹配。" }
+$driverBuild = [version]$Matches[1]
+if ($driverBuild.Major -ne $browser.Version.Major -or $driverBuild.Minor -ne $browser.Version.Minor -or $driverBuild.Build -ne $browser.Version.Build) {
+    throw "运行时 $version 与驱动 $driverBuild 构建系列不匹配。"
+}
 
 $metadataPath = Join-Path $OutputDirectory 'windows-driver.json'
 $metadata = [ordered]@{
@@ -87,6 +115,8 @@ $metadata = [ordered]@{
     architecture = $architecture
     download_url = $url
     driver_version_output = $driverVersion
+    compatibility_rule = 'Microsoft: first three version components must match'
+    compatibility_reference = 'https://learn.microsoft.com/en-us/microsoft-edge/webdriver/'
     prepared_at = [DateTime]::UtcNow.ToString('o')
 }
 $json = $metadata | ConvertTo-Json
