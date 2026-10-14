@@ -9,6 +9,10 @@ rust-version = "1.93.1"
 name = "nodejs_downloader"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# CI观察命令仅用于独立冒烟构建，默认正式构建不包含测试接线。
+[features]
+ci-smoke = []
+
 [build-dependencies]
 tauri-build = { version = "=2.7.2", features = [] }
 
@@ -24,3 +28,9 @@ async-trait = "=0.1.92"
 
 [dev-dependencies]
 tempfile = "=3.27.0"
+
+# 本机 macOS 27 / Apple ld 27037 下 release 宏动态库无调试信息时出现
+# mis-aligned LINKEDIT；同一独立目录仅启用编译期依赖调试信息后实测通过。
+# 只影响构建脚本/宏，不开启正式应用调试模式，不更换工具链或绕过签名。
+[profile.release.build-override]
+debug = true

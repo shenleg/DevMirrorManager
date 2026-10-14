@@ -74,6 +74,16 @@
 
 中途环境/构建问题：固定 Rust 工具链初次下载超时，随后成功安装同版本；首个 Rust 测试确认缺少应用 Interface 后开始实现。正式宿主初次编译缺少必需 PNG 图标，补齐后通过；前端入口尚未写完时构建失败，入口完成后重新构建。Clippy 曾指出测试夹具类型复杂度，改为具名类型后通过。未改镜像或绕过 TLS/权限。
 
+## GitHub Actions 四平台验证（续轮）
+
+用户更新规则后，多平台验证改由 `.github/workflows/ci.yml` 执行，不再规划其他机器的手动开发验证。矩阵为 macOS ARM64/x64、Windows x64/ARM64；同一提交四平台结果和截图尚待实际运行，不提前声明通过。
+
+本轮新增：9个隔离浏览器用户操作测试（本机通过）、feature隔离的真实WebView就绪检查、macOS/Windows目标窗口截图，以及Windows原生WebDriver用户操作脚本。已有34个业务测试保持通过。原生本机冒烟先因缺就绪协议失败，再因旧截图接口不兼容SDK失败，改用ScreenCaptureKit且初始化WindowServer后实际通过，截图已查看。
+
+依赖来源纠正：上轮安装沿用了本机`registry.npmmirror.com`，把来源描述为“官方registry”不准确；本轮锁文件改为`registry.npmjs.org`，显式官方来源`npm ci`成功核验完整性，未修改全局npm设置。
+
+正式release打包本机遇到宏动态库加载错误`mis-aligned LINKEDIT string pool`；全新独立产物目录也复现，排除单纯旧缓存。保持同一目录与工具链，仅启用编译期依赖调试信息后成功生成正式`.app`与`.dmg`（13.07 MiB / 4.58 MiB）。已在`profile.release.build-override`记录该兼容性设置，未开启应用debug或更换工具链；CI最终结果将在运行后追加。
+
 ## 未验证与范围外
 
 - Windows 10 22H2 / Windows 11 x64、macOS Intel、macOS 13 基线：无本轮原生验证证据。

@@ -18,3 +18,9 @@
 # 本地运行和验证临时文件；正式证据放在 docs/verification/
 /.local-validation/
 *.log
+
+# 跨平台自动化临时结果、浏览器报告及独立冒烟构建
+/artifacts/
+/playwright-report/
+/src-tauri/target-ci/
+/test-results/

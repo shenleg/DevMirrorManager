@@ -2,6 +2,8 @@
 pub mod application;
 mod cache;
 mod catalog;
+#[cfg(feature = "ci-smoke")]
+mod ci_smoke;
 pub mod official_source;
 
 use application::{Application, CatalogSnapshot};
@@ -48,7 +50,29 @@ async fn refresh_catalog(state: State<'_, Arc<Application>>) -> Result<(), Strin
 
 /// 启动真实桌面应用；无参数或返回值，宿主配置/TLS初始化失败时停止并报告，不启动下载或修改系统设置。
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(feature = "ci-smoke")]
+    let builder = builder.on_page_load(|window, payload| {
+        if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+            if let Err(error) = window.eval(ci_smoke::READY_SCRIPT) {
+                eprintln!("原生就绪观察注入失败：{error}");
+            }
+        }
+    });
+    #[cfg(feature = "ci-smoke")]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        open_catalog,
+        catalog_snapshot,
+        refresh_catalog,
+        ci_smoke::ci_smoke_ready
+    ]);
+    #[cfg(not(feature = "ci-smoke"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        open_catalog,
+        catalog_snapshot,
+        refresh_catalog
+    ]);
+    builder
         .setup(|app| {
             let source = official_source::OfficialSource::new().map_err(std::io::Error::other)?;
             let application = Arc::new(Application::new(
@@ -79,11 +103,6 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            open_catalog,
-            catalog_snapshot,
-            refresh_catalog
-        ])
         .run(tauri::generate_context!())
         .expect("无法启动 Node.js 发行目录桌面应用");
 }

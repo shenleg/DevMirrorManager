@@ -15,5 +15,10 @@
       "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'"
     }
   },
-  "bundle": { "active": false, "macOS": { "minimumSystemVersion": "13.0" } }
+  "bundle": {
+    "active": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": { "minimumSystemVersion": "13.0", "signingIdentity": "-" },
+    "windows": { "nsis": { "installMode": "currentUser" }, "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true } }
+  }
 }
