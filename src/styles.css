@@ -1,0 +1,62 @@
+/** 职责：复用交互原型的轻色卡片与青绿色焦点，适配窄窗口并保留原生表单可访问性。 */
+:root {
+  color-scheme: light;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #172b3a;
+  background: #f3f7f9;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --muted: #586c7a;
+  --line: #d6e0e6;
+  --accent: #087f8c;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, input { font: inherit; }
+main { max-width: 1180px; margin: auto; padding: 32px 24px 60px; }
+.page-header { margin-bottom: 24px; }
+.eyebrow { color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .1em; }
+h1 { margin: 0; font-size: clamp(24px, 3vw, 32px); letter-spacing: -.03em; line-height: 1.35; }
+h2 { margin: 0 0 14px; font-size: 18px; }
+p { line-height: 1.65; }
+.intro, .muted { color: var(--muted); font-size: 13px; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(260px, 1fr); gap: 18px; align-items: start; }
+.panel { min-width: 0; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.panel-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.panel-heading h2 { margin: 0; }
+.field { display: block; font-size: 13px; font-weight: 650; }
+input[type='search'] { display: block; width: 100%; min-height: 44px; margin-top: 7px; padding: 9px 12px; border: 1px solid #b9c9d1; border-radius: 8px; background: #fff; color: #172b3a; }
+button { min-height: 40px; padding: 8px 14px; border: 1px solid var(--accent); border-radius: 8px; background: #fff; color: var(--accent); font-size: 13px; font-weight: 650; cursor: pointer; }
+button:hover:not(:disabled) { background: #f0fafa; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+button:focus-visible, input:focus-visible { outline: 3px solid #4db6c1; outline-offset: 3px; }
+.release-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.release-list { display: grid; gap: 8px; max-height: min(64vh, 720px); overflow-y: auto; padding: 5px; margin: 12px -5px 0; }
+.release { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; cursor: pointer; }
+.release:hover { background: #f8fbfc; }
+.release.selected { border-color: var(--accent); background: #f0fafa; }
+.release:focus-within { border-color: var(--accent); }
+.release input { margin: 0; flex-shrink: 0; width: 17px; height: 17px; accent-color: var(--accent); }
+.release span { min-width: 0; overflow-wrap: anywhere; }
+.release small { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; line-height: 1.55; }
+.release-fieldset:disabled .release { cursor: not-allowed; opacity: .6; }
+.message { padding: 11px 14px; margin: 12px 0; border-radius: 8px; background: #edf7f7; color: #245860; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.warning, .warnings { background: #fff4df; color: #794b0b; }
+.error { border: 1px solid #edc8c2; background: #fff1ee; color: #9b3021; }
+.warnings { margin: 12px 0; padding: 12px 14px 12px 32px; border-radius: 8px; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.empty { padding: 14px 0; color: var(--muted); font-size: 14px; }
+.feedback { color: #245860; font-size: 13px; }
+.feedback:empty { display: none; }
+.selection-summary { margin: 0; padding: 14px; border-radius: 8px; background: #edf7f7; color: #245860; font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+aside h2:not(:first-child) { margin-top: 28px; }
+.source { font: 12px/1.75 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.metadata { margin: 16px 0; font-size: 13px; }
+.metadata dt { color: var(--muted); font-size: 12px; }
+.metadata dd { margin: 5px 0 0; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 760px) {
+  main { padding: 24px 14px 40px; }
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .panel { padding: 18px; }
+  .release-list { max-height: 52vh; }
+}

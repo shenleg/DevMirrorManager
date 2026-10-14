@@ -1,0 +1,116 @@
+# 四平台开发验证；仅保存构建证据，不发布 Release 或部署。
+name: Tauri cross-platform validation
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS-arm64, runner: macos-latest, arch: arm64, host: aarch64-apple-darwin, bundles: 'app,dmg', executable: nodejs-downloader }
+          - { name: macOS-x64, runner: macos-15-intel, arch: x64, host: x86_64-apple-darwin, bundles: 'app,dmg', executable: nodejs-downloader }
+          - { name: Windows-x64, runner: windows-latest, arch: x64, host: x86_64-pc-windows-msvc, bundles: nsis, executable: nodejs-downloader.exe }
+          - { name: Windows-arm64, runner: windows-11-arm, arch: arm64, host: aarch64-pc-windows-msvc, bundles: nsis, executable: nodejs-downloader.exe }
+    env:
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      EXPECTED_HOST: ${{ matrix.host }}
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      RUST_BACKTRACE: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.18.0'
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - name: 固定 npm 和 Rust 工具链
+        shell: bash
+        run: |
+          npm install --global npm@11.16.0 --registry=https://registry.npmjs.org
+          rustup toolchain install 1.93.1 --profile minimal --component rustfmt --component clippy
+      - name: 核对真实架构
+        shell: bash
+        run: |
+          mkdir -p artifacts/environment
+          node -e "const fs=require('node:fs');const{execFileSync}=require('node:child_process');const rust=execFileSync('rustc',['-vV'],{encoding:'utf8'});if(process.arch!==process.env.EXPECTED_ARCH||!rust.includes('host: '+process.env.EXPECTED_HOST))throw Error('Runner architecture mismatch');fs.writeFileSync('artifacts/environment/host.json',JSON.stringify({platform:process.platform,arch:process.arch,node:process.version,rust,sha:process.env.GITHUB_SHA},null,2));"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+            src-tauri/target-ci
+          key: ${{ runner.os }}-${{ matrix.arch }}-rust-1.93.1-${{ hashFiles('src-tauri/Cargo.lock') }}-v1
+      - name: 安装官方 npm 锁定依赖
+        run: npm ci --registry=https://registry.npmjs.org
+      - name: 前端与 Rust 检查
+        shell: bash
+        run: |
+          npm run typecheck
+          npm test
+          cargo test --locked --manifest-path src-tauri/Cargo.toml
+          cargo fmt --manifest-path src-tauri/Cargo.toml --check
+          cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --features ci-smoke -- -D warnings
+      - name: 安装 macOS 测试浏览器
+        if: runner.os == 'macOS'
+        run: npx playwright install chromium
+      - name: 浏览器用户操作和截图（非原生证据）
+        run: npm run test:browser
+      - name: 正式 release 打包（不含测试 feature）
+        id: bundle
+        run: npm run tauri -- build --ci --bundles ${{ matrix.bundles }} -- --locked
+      - name: 独立原生冒烟构建
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/src-tauri/target-ci
+        run: npm run tauri -- build --ci --no-bundle --features ci-smoke -- --locked
+      - name: 真实原生启动、官方目录与窗口截图
+        run: node scripts/ci/native-smoke.mjs src-tauri/target-ci/release/${{ matrix.executable }} artifacts/native-smoke
+      - name: 安装 Windows 原生 WebDriver
+        if: runner.os == 'Windows'
+        run: cargo install tauri-driver --version 2.1.0 --locked
+      - name: 下载匹配实际运行时的 Microsoft Edge Driver
+        if: runner.os == 'Windows'
+        id: edge
+        shell: pwsh
+        run: ./scripts/ci/windows-driver.ps1 -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/windows-driver"
+      - name: Windows 真实应用 E2E 和 WebView 截图
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/ci/windows-standard-user.ps1 -Application "$env:GITHUB_WORKSPACE/src-tauri/target/release/nodejs-downloader.exe" -TauriDriver "$HOME/.cargo/bin/tauri-driver.exe" -EdgeDriver "${{ steps.edge.outputs.driver_path }}" -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/windows-e2e"
+      - name: 上传验证证据（失败也保留日志）
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: evidence-${{ matrix.name }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            artifacts/environment
+            artifacts/native-smoke
+            artifacts/windows-e2e
+            artifacts/windows-driver/windows-driver.json
+            playwright-report
+            artifacts/browser
+      # 失败构建不能把恢复缓存中的旧安装包当成本次提交产物。
+      - name: 上传内部构建 artifact（不发布）
+        if: always() && steps.bundle.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: build-${{ matrix.name }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/release/bundle
+            src-tauri/target/release/${{ matrix.executable }}

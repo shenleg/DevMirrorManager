@@ -1,0 +1,198 @@
+/** 职责：通过真实 React 用户操作验证目录状态与单选反馈，只替换外部 IPC Adapter。 */
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it } from 'vitest';
+import { App } from './App';
+import type { CatalogAdapter, CatalogSnapshot } from './catalog';
+
+afterEach(cleanup);
+
+/** 创建权威 IPC 样本；query 原样回显，overrides 描述不同目录状态，返回快照，不抛出异常。 */
+function snapshot(query = '', overrides: Partial<CatalogSnapshot> = {}): CatalogSnapshot {
+  return {
+    revision: 1, query, normalizedQuery: '', status: 'ready', hasCatalog: true,
+    releases: [
+      { version: 'v24.10.0', date: '2026-10-01', lts: 'Krypton' },
+      { version: 'v24.9.0', date: null, lts: null },
+    ],
+    checkedAt: 1_760_000_000_000, stale: false, error: null, warnings: [],
+    source: 'https://nodejs.org/dist/index.json', ...overrides,
+  };
+}
+
+/** 创建外部 IPC 控制器；返回待完成请求与通知入口，不模拟应用内部，不抛出异常。 */
+function controlledIpc() {
+  const requests: { query: string; resolve: (value: CatalogSnapshot) => void; reject: (reason: unknown) => void }[] = [];
+  const listeners = new Set<(revision: number) => void>();
+  const adapter: CatalogAdapter = {
+    open: async () => {}, refresh: async () => {},
+    snapshot: (query) => new Promise((resolve, reject) => { requests.push({ query, resolve, reject }); }),
+    listen: async (listener) => {
+      listeners.add(listener);
+      return () => { listeners.delete(listener); };
+    },
+  };
+  return {
+    adapter,
+    /** 完成第 index 个 IPC 请求；value 是权威快照，返回完成承诺，不存在时测试超时报错。 */
+    respond: async (index: number, value: CatalogSnapshot) => {
+      await waitFor(() => expect(requests[index]).toBeDefined());
+      await act(async () => { requests[index]!.resolve(value); });
+    },
+    /** 拒绝第 index 个 IPC 请求；reason 为外部失败原因，返回完成承诺，不存在时测试超时报错。 */
+    fail: async (index: number, reason: string) => {
+      await waitFor(() => expect(requests[index]).toBeDefined());
+      await act(async () => { requests[index]!.reject(new Error(reason)); });
+    },
+    /** 发布目录 revision 通知；无返回值，不抛出异常。 */
+    notify: (revision: number) => { act(() => { for (const listener of listeners) listener(revision); }); },
+  };
+}
+
+describe('正式目录界面用户操作', () => {
+  // 刷新命令确认只表示启动；完成后不可继续误述为等待响应，应以权威状态和校验时间为准。
+  it('刷新完成后的操作说明不再声称仍在等待', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '刷新目录' }));
+    await ipc.respond(1, snapshot('', { revision: 2 }));
+    expect(screen.getByRole('status').textContent).toContain('目录就绪');
+    expect(screen.getByText('已发起手动刷新；结果以目录状态与成功校验时间为准。')).toBeDefined();
+    expect(screen.queryByText(/等待权威结果/)).toBeNull();
+  });
+
+  // 旧快照仍为loading时新的IPC失败不能永久锁住刷新按钮，用户必须能主动恢复。
+  it('刷新进度的IPC读取失败后仍可主动重试', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot('', { status: 'loading', stale: true }));
+    ipc.notify(2);
+    await ipc.fail(1, '目录快照读取失败');
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '刷新目录' }));
+    await ipc.respond(2, snapshot('', { revision: 2 }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('目录就绪');
+  });
+
+  // 官方 false 表示已知无历史 LTS 标记，与缺失/损坏信息的未知不同，均不推断当前支持。
+  it('区分无LTS标记和未知标记', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot('', { releases: [
+      { version: 'v24.10.0', date: null, lts: false },
+      { version: 'v24.9.0', date: null, lts: null },
+    ] }));
+    expect(screen.getByText('发布日期：未知 · LTS 标记：无')).toBeDefined();
+    expect(screen.getByText('发布日期：未知 · LTS 标记：未知')).toBeDefined();
+    expect(screen.getByText(/LTS 标记不代表当前仍受支持/)).toBeDefined();
+  });
+
+  // IPC 查询失败不能把上一查询的空列表当成当前空结果，也必须保留主动重试入口。
+  it('旧查询为空而新查询IPC失败时不伪报无匹配', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot('', { releases: [] }));
+    expect(screen.getByText('没有匹配的发行版本')).toBeDefined();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('searchbox', { name: '搜索发行版本' }));
+    await user.paste('24');
+    await ipc.fail(1, '查询连接中断');
+    expect(screen.getByRole('alert').textContent).toContain('查询连接中断');
+    expect(screen.queryByText('没有匹配的发行版本')).toBeNull();
+    await user.click(screen.getByRole('button', { name: '刷新目录' }));
+    await ipc.respond(2, snapshot('24', { revision: 2 }));
+    expect(await screen.findByRole('radio', { name: 'v24.10.0' })).toBeDefined();
+  });
+
+  // 浏览器不具备真实 IPC，输入不能掩盖桌面环境要求，更不能退回内置假目录。
+  it('浏览器预览明确报错且输入后仍不提供假候选', async () => {
+    render(<App />);
+    expect((await screen.findByRole('alert')).textContent).toContain('Tauri 桌面应用');
+    const user = userEvent.setup();
+    await user.type(screen.getByRole('searchbox', { name: '搜索发行版本' }), '22');
+    expect(screen.getByRole('alert').textContent).toContain('Tauri 桌面应用');
+    expect(screen.queryAllByRole('radio')).toHaveLength(0);
+    expect(screen.queryByText('没有匹配的发行版本')).toBeNull();
+  });
+
+  // 旧目录仍可用，但刷新失败、缓存告警和元数据未知都不能藏在“就绪”里。
+  it('刷新失败保留单选并明确展示旧数据和缓存告警', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    ipc.notify(2);
+    await ipc.respond(1, snapshot('', { revision: 2, status: 'error', stale: true, error: '官方目录请求超时', warnings: ['缓存写入失败，当前结果仅保存在内存'] }));
+    expect(screen.getByRole('alert').textContent).toContain('官方目录请求超时');
+    expect(screen.getByText(/旧数据.*主动刷新/)).toBeDefined();
+    expect(screen.getByText('缓存写入失败，当前结果仅保存在内存')).toBeDefined();
+    expect(screen.getByText(/上次成功校验/)).toBeDefined();
+    expect(screen.getByText(/2025/)).toBeDefined();
+    expect(screen.getByText('当前选择：v24.10.0')).toBeDefined();
+    expect(screen.getByText('发布日期：未知 · LTS 标记：未知')).toBeDefined();
+    await user.click(screen.getByRole('radio', { name: 'v24.9.0' }));
+    expect(screen.getByText('当前选择：v24.9.0')).toBeDefined();
+  });
+
+  // 搜索待定时旧候选禁选，只有权威空结果才能清草稿，回到原查询不会自动恢复。
+  it('搜索无匹配时清除草稿并给出空结果与提示', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('radio', { name: 'v24.10.0' }));
+    await user.click(screen.getByRole('searchbox', { name: '搜索发行版本' }));
+    await user.paste('  V99  ');
+    await user.click(screen.getByRole('radio', { name: 'v24.9.0' }));
+    expect(screen.getByText('当前选择：v24.10.0')).toBeDefined();
+    await ipc.respond(1, snapshot('  V99  ', { normalizedQuery: '99', releases: [] }));
+    expect(screen.getByText('没有匹配的发行版本')).toBeDefined();
+    expect(screen.getByText('尚未选择发行版本')).toBeDefined();
+    expect(screen.getByText(/已清除单选/)).toBeDefined();
+    await user.clear(screen.getByRole('searchbox', { name: '搜索发行版本' }));
+    await ipc.respond(2, snapshot());
+    expect(screen.getByText('尚未选择发行版本')).toBeDefined();
+    expect((screen.getByRole('radio', { name: 'v24.10.0' }) as HTMLInputElement).checked).toBe(false);
+  });
+
+  // 验证目录获取是异步状态：失败必须显示原因与主动刷新，不能标成空结果。
+  it('首次加载失败后可以主动刷新并恢复目录', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    await ipc.respond(0, snapshot('', { revision: 0, status: 'loading', hasCatalog: false, releases: [], checkedAt: null }));
+    expect(screen.getByRole('status').textContent).toContain('加载');
+    ipc.notify(1);
+    await ipc.respond(1, snapshot('', { status: 'error', hasCatalog: false, releases: [], checkedAt: null, error: '官方目录解析失败：重复发行版本' }));
+    expect(screen.getByRole('alert').textContent).toContain('重复发行版本');
+    expect(screen.queryByText('没有匹配的发行版本')).toBeNull();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: '刷新目录' }));
+    await ipc.respond(2, snapshot('', { revision: 2, status: 'loading', hasCatalog: false, releases: [], checkedAt: null }));
+    expect(screen.getByRole('status').textContent).toContain('加载');
+    ipc.notify(3);
+    await ipc.respond(3, snapshot('', { revision: 3 }));
+    expect(await screen.findByRole('radio', { name: 'v24.10.0' })).toBeDefined();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // 验证初始加载不会冒充空结果，并呈现权威版本、来源及单选草稿。
+  it('加载后能从原生radio单选发行版本', async () => {
+    const ipc = controlledIpc();
+    render(<App adapter={ipc.adapter} />);
+    expect(screen.getByRole('status').textContent).toContain('加载');
+    expect(screen.queryByText('没有匹配的发行版本')).toBeNull();
+    await ipc.respond(0, snapshot());
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('radio', { name: 'v24.10.0' }));
+    expect((screen.getByRole('radio', { name: 'v24.10.0' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('当前选择：v24.10.0')).toBeDefined();
+    await user.click(screen.getByRole('radio', { name: 'v24.9.0' }));
+    expect((screen.getByRole('radio', { name: 'v24.10.0' }) as HTMLInputElement).checked).toBe(false);
+    expect(screen.getByText('当前选择：v24.9.0')).toBeDefined();
+    expect(screen.getByText('https://nodejs.org/dist/index.json')).toBeDefined();
+  });
+});
