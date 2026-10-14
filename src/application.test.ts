@@ -76,6 +76,78 @@ function controlledIpc(autoPreparation = true) {
 }
 
 describe('前端目录应用公开 Interface', () => {
+  /** 辅助读取已返回后仍可能跨一个微任务；发布旧查询前必须复核身份，不能清除新查询下的选择。 */
+  it('读取返回与发布之间的新查询不会被旧结果清除选择', async () => {
+    const adapter: CatalogAdapter = {
+      open: async () => {}, refresh: async () => {}, preparePreview: async () => {},
+      listen: async () => () => {},
+      snapshot: async (query, selection) => snapshot(query, {
+        releases: query === '99' ? [] : snapshot().releases,
+        preview: { selection, status: selection.version ? 'idle' : 'unselected', source: null, required: [], error: null },
+      }),
+    };
+    const app = createCatalogApplication(adapter);
+    await app.connect();
+    await app.select('v24.10.0');
+    const obsolete = app.setQuery('99');
+    const latest = new Promise<void>((resolve, reject) => {
+      queueMicrotask(() => { app.setQuery('24').then(resolve, reject); });
+    });
+    await Promise.all([obsolete, latest]);
+    expect(app.getSnapshot().query).toBe('24');
+    expect(app.getSnapshot().selectedVersion).toBe('v24.10.0');
+    expect(app.getSnapshot().catalog?.query).toBe('24');
+    app.disconnect();
+  });
+  /** 通知也可能落在辅助读取返回与发布之间；查询中收到更高revision时必须补读，不能停在旧事实。 */
+  it('读取返回后收到更高revision通知仍补读最新事实', async () => {
+    let revision = 1;
+    let notify = (_revision: number) => {};
+    const adapter: CatalogAdapter = {
+      open: async () => {}, refresh: async () => {}, preparePreview: async () => {},
+      listen: async (listener) => { notify = listener; return () => {}; },
+      snapshot: async (query, selection) => snapshot(query, { revision,
+        preview: { selection, status: selection.version ? 'idle' : 'unselected', source: null, required: [], error: null },
+      }),
+    };
+    const app = createCatalogApplication(adapter);
+    await app.connect();
+    const reading = app.setQuery('24');
+    queueMicrotask(() => { revision = 2; notify(2); });
+    await reading;
+    expect(app.getSnapshot().catalog?.revision).toBe(2);
+    expect(app.getSnapshot().querying).toBe(false);
+    app.disconnect();
+  });
+  /** 失效草稿恢复的辅助读取返回后也有微任务间隔，旧恢复不能清除随后新查询保留的选择。 */
+  it('恢复快照返回与发布之间的新查询保留当前选择', async () => {
+    const latest = deferred<void>();
+    let app: ReturnType<typeof createCatalogApplication>;
+    const adapter: CatalogAdapter = {
+      open: async () => {}, refresh: async () => {}, preparePreview: async () => {},
+      listen: async () => () => {},
+      snapshot: (query, selection) => {
+        if (query === '99' && selection.version) return Promise.reject(new Error('所选发行版本不属于目录'));
+        if (query === '99') {
+          // 两次排队把新操作放在外部承诺完成后的微任务间隔，不读取应用私有状态。
+          queueMicrotask(() => queueMicrotask(() => { app.setQuery('24').then(latest.resolve, latest.reject); }));
+        }
+        return Promise.resolve(snapshot(query, {
+          releases: query === '99' ? [] : snapshot().releases,
+          preview: { selection, status: selection.version ? 'idle' : 'unselected', source: null, required: [], error: null },
+        }));
+      },
+    };
+    app = createCatalogApplication(adapter);
+    await app.connect();
+    await app.select('v24.10.0');
+    await app.setQuery('99');
+    await latest.promise;
+    expect(app.getSnapshot().query).toBe('24');
+    expect(app.getSnapshot().selectedVersion).toBe('v24.10.0');
+    expect(app.getSnapshot().catalog?.query).toBe('24');
+    app.disconnect();
+  });
   /** 验证null-version恢复同样补读revision下界与完整身份，并隔离旧查询/旧连接，不能迟到清新草稿。 */
   it('membership恢复隔离旧查询连接并补读身份与revision', async () => {
     const ipc = controlledIpc(false);

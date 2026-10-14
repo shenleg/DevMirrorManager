@@ -63,6 +63,8 @@ node scripts/ci/native-smoke.mjs src-tauri/target-ci/release/nodejs-downloader .
 - Standards：两项原生观察脚本文档注释问题已补齐，并说明 React 原生 setter 的 why；首次准备／重试共用 `prepareSelected`，收口重复竞态处理。局部测试夹具重复仅为非阻塞建议，因公开 seam 与 React `act` 控制不同而暂保留，不新增通用测试框架。
 - Spec：三项复现均先补失败回归再修复：重连后 `idle` 提供用户主动“准备清单”入口，不自动获取；目录成员校验失败时仅由无发行版本的同查询／目标权威快照确认失配并清草稿；同发行版本已有权威加载／结果时，迟到 IPC 回执不能降级或遮盖它。Rust 输入校验未放松，恢复读取仍验证完整身份、revision 下界与连接世代。未发现范围外下载功能。
 - 修复后本机重新全量验证：前端 **44 项**（31 应用 Interface + 13 正式界面）、Rust 22 项、浏览器 14 项全部通过；正式 ARM64 打包与独立原生复验通过。新增[原生窗口](target-artifact-preview/review-20261014/macos-arm64.png)、[原生结果](target-artifact-preview/review-20261014/native-result.json)、[最小窗口](target-artifact-preview/review-20261014/browser-preview-minimum.png)和[失败／重试](target-artifact-preview/review-20261014/browser-preview-error-minimum.png)均已查看，早期证据未覆盖。
+- 固定提交 `983da44` 的复查确认原三项 Spec 已修复，但发现提取读取辅助函数后新微任务间隔可让旧查询清除新选择。公开回归先失败再修复：普通／恢复读取返回后、发布前重新核对读取世代、连接和 revision 下界。补充回归验证高 revision 通知落在该间隔时仍会补读；应用 Interface 34 项通过。
+- 微任务修复后最终全量复验：前端 **47 项**（34 应用 Interface + 13 正式界面）、浏览器 14 项通过，macOS ARM64 正式打包与原生六目标复验通过。最终[窗口截图](target-artifact-preview/push-20261014/macos-arm64.png)已查看，[原生结果](target-artifact-preview/push-20261014/native-result.json)保留完整事实。原 Rust 22 项及包含原生 feature 的测试／Clippy 复验通过。Standards 复查无硬违规，保留一项非阻塞局部测试夹具重复；Spec 原发现及身份竞态已确认修复。
 - 用户已授权评审收尾后推送功能分支跑现有四平台 CI；授权不包括推送 `main`、修改 CI 或 CI 失败后的额外重推。
 
 ## 后续下载接入约束

@@ -82,7 +82,10 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
     update({ ...state, querying: true, error: null });
     try {
       const catalog = await readSnapshot(query, selection, sequence, epoch);
-      if (!catalog) return;
+      // 辅助函数返回也是一次异步让出；发布前必须再次核对，不能依赖其内部较早的检查。
+      if (!catalog || sequence !== querySequence || epoch !== connectionEpoch || !state.connected) return;
+      // 查询中的通知可能落在辅助函数返回之后；不能发布低于最新通知下界的事实。
+      if (catalog.revision < highestRevision) { await readCatalog(); return; }
       // 刷新失败不撤销已校验目录；是否失配取决于完成查询的实体，而非刷新状态。
       const mismatch = catalog.hasCatalog && state.selectedVersion
         && !catalog.releases.some((release) => release.version === state.selectedVersion);
@@ -101,7 +104,9 @@ export function createCatalogApplication(adapter: CatalogAdapter): CatalogApplic
         try {
           // Rust严格校验目录成员；先以无version读取同query/target，只有权威结果确认失配才能清草稿。
           const recovery = await readSnapshot(query, { version: null, target: selection.target }, sequence, epoch);
-          if (!recovery) return;
+          // 恢复读取同样跨越返回微任务，过时结果不能发布或清草稿。
+          if (!recovery || sequence !== querySequence || epoch !== connectionEpoch || !state.connected) return;
+          if (recovery.revision < highestRevision) { await readCatalog(); return; }
           if (state.selectedVersion === selection.version && recovery.hasCatalog
               && !recovery.releases.some((release) => release.version === selection.version)) {
             update({ ...state, catalog: recovery, selectedVersion: null, querying: false, error: null, previewError: null,
