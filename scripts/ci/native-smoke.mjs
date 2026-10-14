@@ -25,22 +25,28 @@ child.once('error', (error) => { processError = error; });
 let exited = false;
 child.once('exit', () => { exited = true; });
 
-/** 运行目标窗口截图辅助程序；command/args 为平台实现，成功无数据返回，启动或非零退出时拒绝。 */
-async function capture(command, args) {
+/** 编译或运行截图辅助；command/args指定已审查的平台代码，budget限定耗时，stage用于诊断；成功无数据返回，失败拒绝。 */
+async function capture(command, args, budget = 30000, stage = '目标窗口截图') {
   await new Promise((accept, reject) => {
     const helper = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-    const log = createWriteStream(resolve(output, 'capture.log'));
+    const log = createWriteStream(resolve(output, command === 'swiftc' ? 'capture-compile.log' : 'capture.log'));
+    log.write(`[${stage}] started ${new Date().toISOString()}\n`);
     helper.stdout.pipe(log, { end: false });
     helper.stderr.pipe(log, { end: false });
     // 截图辅助也必须有界，不能让权限弹窗把 runner 永久挂住。
-    const timer = setTimeout(() => { helper.kill(); reject(new Error('目标窗口截图超时')); }, 30000);
+    const timer = setTimeout(() => { log.end(`[${stage}] timeout after ${budget}ms\n`); helper.kill(); reject(new Error(`${stage}超时`)); }, budget);
     helper.once('error', (error) => { clearTimeout(timer); log.end(); reject(error); });
-    helper.once('exit', (code) => { clearTimeout(timer); log.end(); code === 0 ? accept() : reject(new Error(`截图失败：退出码 ${code}`)); });
+    helper.once('exit', (code) => { clearTimeout(timer); if (!log.writableEnded) log.end(`[${stage}] exited ${code}\n`); code === 0 ? accept() : reject(new Error(`${stage}失败：退出码 ${code}`)); });
   });
 }
 
 let result;
 try {
+  const macCapture = resolve(output, 'capture-macos');
+  if (process.platform === 'darwin') {
+    // Swift解释器的冷编译不属于截图耗时；单独编译并记录，截图仍保留30秒硬门槛。
+    await capture('swiftc', [resolve(scripts, 'capture-macos.swift'), '-o', macCapture], 120000, '截图辅助编译');
+  }
   const deadline = Date.now() + timeout;
   let readiness;
   while (Date.now() < deadline) {
@@ -55,7 +61,7 @@ try {
   if (readiness.arch !== process.arch.replace('x64', 'x86_64').replace('arm64', 'aarch64')) throw new Error('就绪报告架构与宿主不匹配');
   const screenshot = resolve(output, 'native-window.png');
   if (process.platform === 'darwin') {
-    await capture('swift', [resolve(scripts, 'capture-macos.swift'), String(child.pid), screenshot]);
+    await capture(macCapture, [String(child.pid), screenshot]);
   } else if (process.platform === 'win32') {
     await capture('pwsh', ['-NoProfile', '-File', resolve(scripts, 'capture-windows.ps1'), '-ProcessId', String(child.pid), '-OutputPath', screenshot]);
   } else throw new Error(`未支持的原生截图平台：${process.platform}`);

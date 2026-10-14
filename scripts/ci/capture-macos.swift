@@ -4,6 +4,12 @@ import AppKit
 import ScreenCaptureKit
 import ImageIO
 
+/// 写入阶段诊断；message为当前捕获步骤，无返回值；stderr不可写时由系统报告输出失败。
+// 每个阶段直接写stderr，权限等待与API捕获挂起不能表现成无日志的同一超时。
+func reportStage(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+reportStage("capture helper entered")
 let args = CommandLine.arguments
 guard args.count == 3, let pid = Int32(args[1]) else { fatalError("用法：capture-macos.swift <pid> <new-output.png>") }
 let destination = URL(fileURLWithPath: args[2])
@@ -15,7 +21,9 @@ let app = NSApplication.shared
 app.setActivationPolicy(.prohibited)
 Task { @MainActor in
     do {
+        reportStage("listing shareable target windows")
         let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
+        reportStage("shareable windows received")
         guard let window = content.windows.first(where: { $0.owningApplication?.processID == pid && $0.windowLayer == 0 && $0.frame.width >= 100 }) else {
             throw NSError(domain: "Capture", code: 1, userInfo: [NSLocalizedDescriptionKey: "没有目标应用的可见窗口"])
         }
@@ -25,7 +33,9 @@ Task { @MainActor in
         configuration.width = Int(window.frame.width)
         configuration.height = Int(window.frame.height)
         configuration.showsCursor = false
+        reportStage("capturing target window \(window.windowID)")
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        reportStage("target window captured")
         guard image.width >= 100, image.height >= 100,
               let output = CGImageDestinationCreateWithURL(destination as CFURL, "public.png" as CFString, 1, nil) else {
             throw NSError(domain: "Capture", code: 2, userInfo: [NSLocalizedDescriptionKey: "目标窗口PNG输出不可用"])
