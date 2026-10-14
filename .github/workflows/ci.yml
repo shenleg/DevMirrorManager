@@ -88,7 +88,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          node tests/native/windows.e2e.mjs "$env:GITHUB_WORKSPACE/src-tauri/target/release/nodejs-downloader.exe" "$HOME/.cargo/bin/tauri-driver.exe" "${{ steps.edge.outputs.driver_path }}" "$env:GITHUB_WORKSPACE/artifacts/windows-e2e"
+          ./scripts/ci/windows-standard-user.ps1 -Application "$env:GITHUB_WORKSPACE/src-tauri/target/release/nodejs-downloader.exe" -TauriDriver "$HOME/.cargo/bin/tauri-driver.exe" -EdgeDriver "${{ steps.edge.outputs.driver_path }}" -OutputDirectory "$env:GITHUB_WORKSPACE/artifacts/windows-e2e"
       - name: 上传验证证据（失败也保留日志）
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -19,6 +19,7 @@ let stdout, stderr;
 /** 向固定本地 WebDriver 发送 method/route/body；返回协议 value，超时、HTTP 或协议错误均抛出。 */
 async function request(method, route, body, timeout = 15_000) {
   requireDriver();
+  result.stage = `${method} ${route}`;
   const remaining = deadline - Date.now();
   assert(remaining > 0, '原生 E2E 已超过总时间预算');
   const response = await fetch(`${endpoint}${route}`, {
